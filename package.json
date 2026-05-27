@@ -1,0 +1,47 @@
+{
+  "name": "isb-deploy-pipeline",
+  "version": "1.0.0",
+  "description": "Self-mutating CDK Pipeline for deploying the Innovation Sandbox on AWS solution across multiple accounts and stages",
+  "private": true,
+  "bin": {
+    "isb-deploy-pipeline": "bin/pipeline-app.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "jest",
+    "test:update": "jest -u",
+    "lint": "eslint . --ext .ts",
+    "format": "prettier --write \"**/*.{ts,json,md}\"",
+    "cdk": "cdk",
+    "synth": "cdk synth",
+    "diff": "cdk diff",
+    "deploy:pipeline": "cdk deploy --require-approval never",
+    "destroy:pipeline": "cdk destroy",
+    "bootstrap:tooling": "cdk bootstrap",
+    "bootstrap:target": "echo 'Run cdk bootstrap aws://<account>/<region> --trust <tooling-account-id> --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess in each target account'"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.9.0",
+    "@typescript-eslint/eslint-plugin": "^8.15.0",
+    "@typescript-eslint/parser": "^8.15.0",
+    "aws-cdk": "2.167.1",
+    "eslint": "^9.15.0",
+    "jest": "^29.7.0",
+    "prettier": "^3.3.3",
+    "ts-jest": "^29.2.5",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.6.3"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.167.1",
+    "constructs": "^10.4.2",
+    "dotenv": "^16.4.5",
+    "source-map-support": "^0.5.21"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
+  }
+}
