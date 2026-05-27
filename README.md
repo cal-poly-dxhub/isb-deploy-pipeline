@@ -181,6 +181,12 @@ account. Pre-create that role with:
 | `web-ui.int.test.ts` | CloudFront distribution is `Deployed` and the root URL returns a 200 with the SPA shell HTML. |
 | `dynamodb.int.test.ts` | Each table referenced by Data-stack outputs is `ACTIVE`. |
 | `appconfig.int.test.ts` | An InnovationSandbox AppConfig application exists and its latest deployment per environment is in a healthy state. |
+| `lambda.int.test.ts` | Every Lambda referenced by Compute-stack outputs is `Active` and not on a deprecated runtime. |
+| `step-functions.int.test.ts` | The cleanup state machine is `ACTIVE` and the last 20 executions don't have a 100% failure rate. |
+| `eventbridge.int.test.ts` | A custom InnovationSandbox event bus exists, has at least one ENABLED rule, and every enabled rule has at least one target. |
+| `waf.int.test.ts` | A regional WAF web ACL exists, has at least one rule, and is associated with at least one API Gateway stage. |
+| `ecr.int.test.ts` | (Skipped unless `ISB_PRIVATE_ECR_REPO` is set) The private AWS Nuke ECR repository exists and the latest image has a SHA-256 digest. |
+| `organizations.int.test.ts` | (Skipped unless `ISB_RUN_ORG_TESTS=true` and credentials reach the Org Management account) Sandbox OUs exist, at least one InnovationSandbox SCP exists, and every InnovationSandbox OU has at least one SCP attached. |
 
 ### Writing new integration tests
 

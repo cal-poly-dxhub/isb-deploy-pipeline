@@ -150,6 +150,10 @@ export function addInnovationSandboxDeployment(
       input,
       hubAccount: stage.accounts.hub.account,
       hubRegion: stage.accounts.hub.region,
+      orgMgtRegion: stage.accounts.orgManagement.region,
+      privateEcrRepo: buildAndPushNukeImage
+        ? `innovation-sandbox-${stage.stageName.toLowerCase()}`
+        : undefined,
       namespace:
         stage.envOverrides?.NAMESPACE ?? stage.stageName.toLowerCase(),
     });

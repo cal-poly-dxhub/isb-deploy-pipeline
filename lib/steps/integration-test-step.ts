@@ -10,6 +10,13 @@ export interface IntegrationTestStepProps {
   readonly hubRegion: string;
   /** Namespace passed via ISB_NAMESPACE so test stack lookups resolve. */
   readonly namespace: string;
+  /** Org Management region (for AWS Organizations tests). Defaults to hub. */
+  readonly orgMgtRegion?: string;
+  /**
+   * Private ECR repository name. If set, the ECR integration test runs;
+   * otherwise the test is skipped.
+   */
+  readonly privateEcrRepo?: string;
 }
 
 /**
@@ -50,6 +57,10 @@ export function createIntegrationTestStep(
     env: {
       ISB_HUB_REGION: props.hubRegion,
       ISB_NAMESPACE: props.namespace,
+      ...(props.orgMgtRegion ? { ISB_ORG_MGT_REGION: props.orgMgtRegion } : {}),
+      ...(props.privateEcrRepo
+        ? { ISB_PRIVATE_ECR_REPO: props.privateEcrRepo }
+        : {}),
     },
     buildEnvironment: {
       buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,

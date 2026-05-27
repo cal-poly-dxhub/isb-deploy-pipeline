@@ -13,11 +13,18 @@ import {
  *   ISB_NAMESPACE               namespace prefix used in stack names (default
  *                               matches the stage name lowercased)
  *
+ * Optional (only required by the Organizations test):
+ *
+ *   ISB_ORG_MGT_REGION          region of the deployed AccountPool stack;
+ *                               defaults to ISB_HUB_REGION
+ *
  * If you run the tests locally, export them in your shell (or pass them via
- * `--env`) and make sure your AWS credentials point at the hub account.
+ * `--env`) and make sure your AWS credentials point at the hub account (or,
+ * for org-management tests, an account that can call AWS Organizations).
  */
 export interface IntegrationTestEnv {
   readonly hubRegion: string;
+  readonly orgMgtRegion: string;
   readonly namespace: string;
   readonly stackNames: {
     readonly accountPool: string;
@@ -33,6 +40,8 @@ export function loadIntegrationEnv(): IntegrationTestEnv {
     process.env.AWS_REGION ??
     'us-east-1';
 
+  const orgMgtRegion = process.env.ISB_ORG_MGT_REGION ?? hubRegion;
+
   const namespace = process.env.ISB_NAMESPACE ?? 'dev';
 
   // The upstream solution names stacks "InnovationSandbox-<Component>" by
@@ -40,6 +49,7 @@ export function loadIntegrationEnv(): IntegrationTestEnv {
   const suffix = namespace ? `-${namespace}` : '';
   return {
     hubRegion,
+    orgMgtRegion,
     namespace,
     stackNames: {
       accountPool: `InnovationSandbox-AccountPool${suffix}`,
