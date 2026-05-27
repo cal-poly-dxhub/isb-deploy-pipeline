@@ -8,20 +8,26 @@ export interface IntegrationTestStepProps {
   readonly input: IFileSetProducer;
   readonly hubAccount: string;
   readonly hubRegion: string;
+  /** Namespace passed via ISB_NAMESPACE so test stack lookups resolve. */
+  readonly namespace: string;
 }
 
 /**
- * Runs post-deployment smoke tests against the freshly deployed Innovation
- * Sandbox installation. Examples of useful checks:
+ * Runs the integration test suite (`npm run test:integration`) against the
+ * freshly deployed Innovation Sandbox installation in the hub account.
  *
- *   - Verify CloudFormation stack outputs include the expected web UI URL.
- *   - Hit the API Gateway health endpoint and assert 401 without auth (sanity).
- *   - Verify the AWS Nuke ECR image is present (when private repo is enabled).
- *   - Verify the AppConfig hosted configuration version resolves successfully.
+ * The test suite lives in `test/integration/` of THIS pipeline repo. It uses
+ * the AWS SDK to assert on the deployed CloudFormation, API Gateway,
+ * CloudFront, DynamoDB, and AppConfig resources.
  *
- * The actual test logic should live in the upstream repo (e.g. a future
- * `npm run test:integration` script). This step is a thin runner that assumes
- * a read-only role in the hub account and executes those tests.
+ * The CodeBuild project assumes the `InnovationSandboxIntegrationTestRole` in
+ * the hub account, which must:
+ *
+ *   - Trust the tooling account (or this pipeline's CodeBuild role)
+ *   - Have read-only access to: cloudformation, apigateway, cloudfront,
+ *     dynamodb, appconfig, ecr, lambda
+ *
+ * Failure of any test fails the pipeline stage.
  */
 export function createIntegrationTestStep(
   props: IntegrationTestStepProps,
@@ -31,17 +37,20 @@ export function createIntegrationTestStep(
     commands: [
       'set -euo pipefail',
       'echo "==> Running integration tests against ' + props.stageName + '"',
-      `CREDS=$(aws sts assume-role --role-arn arn:aws:iam::${props.hubAccount}:role/InnovationSandboxIntegrationTestRole --role-session-name pipeline-integ-test)`,
+      `CREDS=$(aws sts assume-role --role-arn arn:aws:iam::${props.hubAccount}:role/InnovationSandboxIntegrationTestRole --role-session-name pipeline-integ-test --duration-seconds 3600)`,
       'export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)',
       'export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)',
       'export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)',
+      // Install dev dependencies (jest, ts-jest, AWS SDK clients).
       'npm ci --no-audit --no-fund',
-      // The upstream repo does not currently expose a separate integration
-      // test script, so we run the unit/snapshot tests as a baseline guard
-      // and log the deployed stack outputs for manual inspection.
-      'npm test -- --reporter=default',
-      `aws cloudformation describe-stacks --region ${props.hubRegion} --stack-name InnovationSandbox-Compute --query "Stacks[0].Outputs" --output table || true`,
+      // Run the integration project. --runInBand serialises tests so we
+      // don't burn API quota with parallel describe-stack calls.
+      'npm run test:integration',
     ],
+    env: {
+      ISB_HUB_REGION: props.hubRegion,
+      ISB_NAMESPACE: props.namespace,
+    },
     buildEnvironment: {
       buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
       computeType: codebuild.ComputeType.SMALL,

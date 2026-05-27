@@ -130,11 +130,79 @@ to trigger a new run.
 │       ├── nuke-image-step.ts       # AWS Nuke ECR build/push
 │       └── integration-test-step.ts # Post-deploy smoke tests
 ├── test/
-│   └── pipeline-stack.test.ts
+│   ├── pipeline-stack.test.ts       # Unit tests (no AWS calls)
+│   └── integration/                 # Integration tests (real AWS calls)
+│       ├── support/test-env.ts
+│       ├── cloudformation.int.test.ts
+│       ├── api-gateway.int.test.ts
+│       ├── web-ui.int.test.ts
+│       ├── dynamodb.int.test.ts
+│       └── appconfig.int.test.ts
 ├── cdk.json
 ├── package.json
 └── tsconfig.json
 ```
+
+## Integration Tests
+
+Unit tests (`npm test`) only verify the synthesised CloudFormation. Real
+post-deploy validation happens in `test/integration/`, which uses the AWS SDK
+to assert on the *deployed* infrastructure.
+
+### Running integration tests locally
+
+```bash
+# Authenticate against the hub account.
+aws sts get-caller-identity
+
+# Point the suite at the right deployment.
+export ISB_HUB_REGION=us-east-1
+export ISB_NAMESPACE=dev          # matches NAMESPACE used during deploy
+
+npm run test:integration
+```
+
+### Running them in the pipeline
+
+The pipeline's `IntegrationTest-<Stage>` step does this automatically. It
+assumes a role named `InnovationSandboxIntegrationTestRole` in the hub
+account. Pre-create that role with:
+
+- A trust policy allowing the tooling account
+- Read-only policies for: cloudformation, apigateway, cloudfront, dynamodb,
+  appconfig, ecr, lambda, sts
+
+### What the included tests cover
+
+| File | What it asserts |
+|---|---|
+| `cloudformation.int.test.ts` | All four upstream stacks reached `CREATE_COMPLETE` / `UPDATE_COMPLETE` and publish at least one Output. |
+| `api-gateway.int.test.ts` | Compute-stack API URL is HTTPS, rejects unauthenticated requests with 401/403, and serves CORS preflight. |
+| `web-ui.int.test.ts` | CloudFront distribution is `Deployed` and the root URL returns a 200 with the SPA shell HTML. |
+| `dynamodb.int.test.ts` | Each table referenced by Data-stack outputs is `ACTIVE`. |
+| `appconfig.int.test.ts` | An InnovationSandbox AppConfig application exists and its latest deployment per environment is in a healthy state. |
+
+### Writing new integration tests
+
+1. Create `test/integration/<feature>.int.test.ts`.
+2. At the top of the file:
+   ```ts
+   import { loadIntegrationEnv } from './support/test-env';
+   jest.setTimeout(120_000);
+   const env = loadIntegrationEnv();
+   ```
+3. Use the AWS SDK v3 clients to query deployed resources. Get resource IDs
+   via `requireStackOutput(env.hubRegion, env.stackNames.compute, 'OutputKey')`
+   instead of hardcoding them.
+4. Prefer assertions about *current state* over modifying state. Tests should
+   be idempotent and safe to run on Prod.
+5. Run `npm run test:integration` against your dev environment to confirm
+   they pass before merging.
+
+For destructive or end-to-end functional tests (creating leases, exercising
+the cleanup workflow), put them in a separate `test/functional/` directory and
+gate them behind a `RUN_FUNCTIONAL_TESTS=true` env var so they don't run on
+Prod by default.
 
 ## Customisation
 

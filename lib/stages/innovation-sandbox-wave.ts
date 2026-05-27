@@ -150,6 +150,8 @@ export function addInnovationSandboxDeployment(
       input,
       hubAccount: stage.accounts.hub.account,
       hubRegion: stage.accounts.hub.region,
+      namespace:
+        stage.envOverrides?.NAMESPACE ?? stage.stageName.toLowerCase(),
     });
     testStep.addStepDependency(computeStep);
     wave.addPost(testStep);
