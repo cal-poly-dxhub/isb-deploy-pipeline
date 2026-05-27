@@ -4,38 +4,6 @@ A self-mutating AWS CDK Pipeline that builds, tests, and deploys the [Innovation
 Sandbox on AWS](https://aws.amazon.com/solutions/implementations/innovation-sandbox-on-aws/)
 solution across multiple AWS accounts and stages (Dev / Staging / Prod).
 
-## Architecture
-
-```
-                  ┌────────────────────────────────────┐
-                  │         Tooling Account            │
-                  │  ┌──────────────────────────────┐  │
-                  │  │  CodePipeline (this stack)   │  │
-                  │  └──────────────┬───────────────┘  │
-                  │                 │                  │
-                  └─────────────────┼──────────────────┘
-                                    │
-                ┌───────────────────┼───────────────────┐
-                ▼                   ▼                   ▼
-        ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-        │  Dev Wave    │ -> │ Staging Wave │ -> │  Prod Wave   │
-        └──────┬───────┘    └──────┬───────┘    └──────┬───────┘
-               │                   │                   │
-       ┌───────┼───────────────────┼───────────────────┼───────┐
-       ▼       ▼                   ▼                   ▼       ▼
-   AccountPool  IDC               Data         Nuke ECR Image  Compute
-    (Org Mgmt) (IDC)             (Hub)             (Hub)        (Hub)
-```
-
-Each wave deploys the four Innovation Sandbox stacks in dependency order:
-
-1. **AccountPool** → Org Management account (creates OUs, SCPs)
-2. **IDC** → IAM Identity Center delegated admin account (permission sets)
-3. **Data** → Hub account (DynamoDB, AppConfig)
-4. **(Optional) Nuke ECR Image** → Hub account (private AWS Nuke Docker image)
-5. **Compute** → Hub account (CloudFront, API Gateway, Lambda, Step Functions)
-6. **(Optional) Integration Tests** → Hub account
-
 ## Prerequisites
 
 - Node 22+ and npm 10+
