@@ -77,8 +77,7 @@ export interface DeploymentStageConfig {
 }
 
 /**
- * Configuration for the source repository the pipeline pulls from. This is the
- * upstream Innovation Sandbox source.
+ * Configuration for a GitHub source repository.
  */
 export interface SourceConfig {
   /** GitHub owner (org or user). */
@@ -110,8 +109,11 @@ export interface PipelineConfig {
   /** Account/region the pipeline itself lives in (the "tooling" account). */
   readonly toolingEnv: AwsEnvironment;
 
-  /** Where to pull upstream source from. */
+  /** Where to pull upstream Innovation Sandbox source from. */
   readonly source: SourceConfig;
+
+  /** Where to pull this pipeline's own source from (for self-mutation). */
+  readonly pipelineSource: SourceConfig;
 
   /**
    * Ordered list of deployment stages. The pipeline executes them sequentially,

@@ -1,4 +1,4 @@
-import { ManualApprovalStep, Wave } from 'aws-cdk-lib/pipelines';
+import { CodePipelineSource, ManualApprovalStep, Wave } from 'aws-cdk-lib/pipelines';
 import { Topic } from 'aws-cdk-lib/aws-sns';
 import { EmailSubscription } from 'aws-cdk-lib/aws-sns-subscriptions';
 import { Construct } from 'constructs';
@@ -16,8 +16,11 @@ export interface InnovationSandboxWaveProps {
   /** Configuration for this stage (Dev/Staging/Prod). */
   readonly stage: DeploymentStageConfig;
 
-  /** The synth output / source artifact used by deploy steps. */
+  /** The synth output (pipeline repo) used by integration test steps. */
   readonly input: IFileSetProducer;
+
+  /** The upstream Innovation Sandbox source used by deploy/nuke steps. */
+  readonly upstreamSource: CodePipelineSource;
 
   /** If true, build & push the AWS Nuke Docker image before Compute deploy. */
   readonly buildAndPushNukeImage: boolean;
@@ -43,7 +46,7 @@ export interface InnovationSandboxWaveProps {
 export function addInnovationSandboxDeployment(
   props: InnovationSandboxWaveProps,
 ): void {
-  const { wave, stage, input, buildAndPushNukeImage, scope } = props;
+  const { wave, stage, input, upstreamSource, buildAndPushNukeImage, scope } = props;
 
   // 1. Optional manual approval gate at the front of the wave.
   let approvalStep: ManualApprovalStep | undefined;
@@ -59,7 +62,7 @@ export function addInnovationSandboxDeployment(
   const accountPoolStep = createDeployStep({
     stack: 'account-pool',
     stageName: stage.stageName,
-    input,
+    input: upstreamSource,
     targetAccount: stage.accounts.orgManagement.account,
     targetRegion: stage.accounts.orgManagement.region,
     envOverrides: {
@@ -78,7 +81,7 @@ export function addInnovationSandboxDeployment(
   const idcStep = createDeployStep({
     stack: 'idc',
     stageName: stage.stageName,
-    input,
+    input: upstreamSource,
     targetAccount: stage.accounts.idc.account,
     targetRegion: stage.accounts.idc.region,
     envOverrides: {
@@ -94,7 +97,7 @@ export function addInnovationSandboxDeployment(
   const dataStep = createDeployStep({
     stack: 'data',
     stageName: stage.stageName,
-    input,
+    input: upstreamSource,
     targetAccount: stage.accounts.hub.account,
     targetRegion: stage.accounts.hub.region,
     envOverrides: {
@@ -118,7 +121,7 @@ export function addInnovationSandboxDeployment(
   if (buildAndPushNukeImage) {
     const nukeStep = createNukeImageBuildStep({
       stageName: stage.stageName,
-      input,
+      input: upstreamSource,
       hubAccount: stage.accounts.hub.account,
       hubRegion: stage.accounts.hub.region,
       ecrRepoName: `innovation-sandbox-${stage.stageName.toLowerCase()}`,
@@ -136,7 +139,7 @@ export function addInnovationSandboxDeployment(
   const computeStep = createDeployStep({
     stack: 'compute',
     stageName: stage.stageName,
-    input,
+    input: upstreamSource,
     targetAccount: stage.accounts.hub.account,
     targetRegion: stage.accounts.hub.region,
     envOverrides: computeEnvOverrides,

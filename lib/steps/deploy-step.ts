@@ -87,7 +87,10 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
   const step = new CodeBuildStep(`Deploy-${props.stageName}-${props.stack}`, {
     input: props.input,
     commands: [
-      'set -euo pipefail',
+      // CodeBuild's default Linux shell is dash (Ubuntu's /bin/sh), which
+      // does not support `set -o pipefail`. We use `set -eu` instead, which
+      // is portable across dash, sh, and bash.
+      'set -eu',
       'echo "==> Deploying upstream stack: ' + props.stack + '"',
       'echo "==> Target: ' + props.targetAccount + ' / ' + props.targetRegion + '"',
       'node --version',
@@ -100,7 +103,7 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
     ],
     env: buildEnvVars,
     buildEnvironment: {
-      buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
+      buildImage: codebuild.LinuxBuildImage.AMAZON_LINUX_2_5,
       computeType: codebuild.ComputeType.MEDIUM,
       privileged: false,
       environmentVariables: buildEnvironmentVariables,

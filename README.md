@@ -112,6 +112,23 @@ After the first deploy, the pipeline becomes self-mutating. Push changes to
 either this repo (pipeline definition) or the upstream Innovation Sandbox repo
 to trigger a new run.
 
+## Dual-Source Architecture
+
+The pipeline uses **two GitHub source inputs**:
+
+1. **This pipeline repo** (primary) — contains the CDK pipeline definition,
+   integration tests, and configuration. Used for self-mutation and test steps.
+2. **Upstream Innovation Sandbox repo** — contains the solution source code,
+   CDK stacks, and Dockerfiles. Used for build/test/deploy steps.
+
+Both sources trigger the pipeline on push. The CodeStar Connection must have
+access to both repositories. Configure them via:
+
+| Variable | Description |
+|---|---|
+| `GITHUB_OWNER` / `GITHUB_REPO` / `GITHUB_BRANCH` | Upstream Innovation Sandbox repo |
+| `PIPELINE_GITHUB_OWNER` / `PIPELINE_GITHUB_REPO` / `PIPELINE_GITHUB_BRANCH` | This pipeline repo |
+
 ## Project Layout
 
 ```

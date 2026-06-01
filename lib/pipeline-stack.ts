@@ -71,12 +71,15 @@ export class PipelineStack extends Stack {
     // 1. Encryption + artifact bucket
     // ------------------------------------------------------------------
     // Use a customer-managed KMS key so cross-account roles can be granted
-    // explicit decrypt permissions on pipeline artifacts.
+    // explicit decrypt permissions on pipeline artifacts. We use DESTROY for
+    // the pipeline's own scratch resources so a failed initial deploy can be
+    // retried without manual cleanup. (The upstream solution stacks - which
+    // hold real data - use their own retention policies.)
     const artifactKey = new kms.Key(this, 'PipelineArtifactKey', {
       alias: `alias/${config.pipelineName.toLowerCase()}-artifacts`,
       description: 'KMS key for Innovation Sandbox pipeline artifacts',
       enableKeyRotation: true,
-      removalPolicy: RemovalPolicy.RETAIN,
+      removalPolicy: RemovalPolicy.DESTROY,
     });
 
     const artifactBucket = new s3.Bucket(this, 'PipelineArtifactBucket', {
@@ -86,7 +89,8 @@ export class PipelineStack extends Stack {
       versioned: true,
       encryption: s3.BucketEncryption.KMS,
       encryptionKey: artifactKey,
-      removalPolicy: RemovalPolicy.RETAIN,
+      removalPolicy: RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
       lifecycleRules: [
         {
           id: 'DeleteOldVersions',
@@ -113,66 +117,84 @@ export class PipelineStack extends Stack {
     }
 
     // ------------------------------------------------------------------
-    // 2. Source action
+    // 2. Source actions
     // ------------------------------------------------------------------
-    const source = config.source.codestarConnectionArn
-      ? CodePipelineSource.connection(
-          `${config.source.owner}/${config.source.repo}`,
-          config.source.branch,
-          {
-            connectionArn: config.source.codestarConnectionArn,
-            triggerOnPush: true,
-          },
-        )
-      : CodePipelineSource.gitHub(
-          `${config.source.owner}/${config.source.repo}`,
-          config.source.branch,
-          {
-            authentication:
-              config.source.connectionSecretName !== undefined
-                ? // Defer secret resolution to the pipeline; expects a token
-                  // stored under this secret name in the tooling account.
-                  // The CDK GitHub source uses Secrets Manager directly.
-                  undefined
-                : undefined,
-          },
-        );
+    // PRIMARY source: this pipeline repo (required for self-mutation).
+    const pipelineSource = CodePipelineSource.connection(
+      `${config.pipelineSource.owner}/${config.pipelineSource.repo}`,
+      config.pipelineSource.branch,
+      {
+        connectionArn: config.pipelineSource.codestarConnectionArn!,
+        triggerOnPush: true,
+      },
+    );
+
+    // ADDITIONAL source: upstream Innovation Sandbox repo.
+    const upstreamSource = CodePipelineSource.connection(
+      `${config.source.owner}/${config.source.repo}`,
+      config.source.branch,
+      {
+        connectionArn: config.source.codestarConnectionArn!,
+        triggerOnPush: true,
+      },
+    );
 
     // ------------------------------------------------------------------
     // 3. Synth step (build + test + cdk synth for upstream + this pipeline)
     // ------------------------------------------------------------------
-    // The synth step does double duty: it builds the upstream cloud assembly
-    // AND synthesises THIS pipeline (so self-mutation works). We achieve that
-    // by checking out a working copy of the pipeline repo into a sub-folder,
-    // running its `cdk synth`, and merging the outputs.
+    // The pipeline repo is the PRIMARY input (so self-mutate finds
+    // InnovationSandboxPipelineStack in the cloud assembly). The upstream
+    // Innovation Sandbox repo is mounted as an additional input at
+    // `../upstream`.
+    const firstStage = config.stages[0];
+    const synthEnv: Record<string, string> = {
+      NODE_OPTIONS: '--max-old-space-size=8192',
+      ORG_MGT_ACCOUNT_ID: firstStage.accounts.orgManagement.account,
+      IDC_ACCOUNT_ID: firstStage.accounts.idc.account,
+      HUB_ACCOUNT_ID: firstStage.accounts.hub.account,
+      ...(firstStage.envOverrides ?? {}),
+    };
+
     const synthStep = new CodeBuildStep('Synth', {
-      input: source,
+      input: pipelineSource,
+      additionalInputs: {
+        '../upstream': upstreamSource,
+      },
       installCommands: [
-        'set -euo pipefail',
+        'set -eu',
         'echo "Node $(node --version), npm $(npm --version)"',
         'npm install -g aws-cdk@2.167.1',
       ],
       commands: [
-        'set -euo pipefail',
+        'set -eu',
+        // Build & test upstream
         'echo "==> Installing upstream dependencies"',
-        'npm ci --no-audit --no-fund',
+        'cd ../upstream && npm ci --no-audit --no-fund',
         'echo "==> Lint"',
-        'npm run lint --if-present || true',
+        'cd ../upstream && npm run lint --if-present || true',
         'echo "==> Unit & snapshot tests"',
-        'npm test',
+        'cd ../upstream && npm test',
         'echo "==> Synth upstream Innovation Sandbox CDK app"',
-        'npx cdk synth --all --output cdk.out',
+        'cd ../upstream/source/infrastructure && npx cdk synth --all --output ../../cdk.out',
+        // Synth this pipeline
+        'echo "==> Synth pipeline stack"',
+        'npm ci --no-audit --no-fund',
+        'npx cdk synth',
         'echo "==> Done"',
       ],
-      env: {
-        // Pin Node 22 (matches upstream prerequisite).
-        NODE_OPTIONS: '--max-old-space-size=8192',
-      },
+      env: synthEnv,
       buildEnvironment: {
-        buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
+        buildImage: codebuild.LinuxBuildImage.AMAZON_LINUX_2_5,
         computeType: codebuild.ComputeType.LARGE,
-        privileged: true, // required for docker buildx in synth if needed
+        privileged: true,
       },
+      partialBuildSpec: codebuild.BuildSpec.fromObject({
+        phases: {
+          install: {
+            'runtime-versions': { nodejs: '20' },
+          },
+        },
+      }),
       timeout: Duration.minutes(120),
       primaryOutputDirectory: 'cdk.out',
     });
@@ -183,7 +205,7 @@ export class PipelineStack extends Stack {
     const pipelineLogGroup = new logs.LogGroup(this, 'PipelineLogGroup', {
       logGroupName: `/aws/codepipeline/${config.pipelineName}`,
       retention: logs.RetentionDays.SIX_MONTHS,
-      removalPolicy: RemovalPolicy.RETAIN,
+      removalPolicy: RemovalPolicy.DESTROY,
     });
 
     this.pipeline = new CodePipeline(this, 'Pipeline', {
@@ -198,9 +220,19 @@ export class PipelineStack extends Stack {
       // bucket created by the construct does not become a duplicate.
       codeBuildDefaults: {
         buildEnvironment: {
-          buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
+          buildImage: codebuild.LinuxBuildImage.AMAZON_LINUX_2_5,
           computeType: codebuild.ComputeType.MEDIUM,
         },
+        // Force Node 20 for every CodeBuild project (deploy, self-mutate,
+        // asset publishing, integration tests). Upstream Innovation Sandbox
+        // dependencies (vite@7.x and friends) require Node 20.19+.
+        partialBuildSpec: codebuild.BuildSpec.fromObject({
+          phases: {
+            install: {
+              'runtime-versions': { nodejs: '20' },
+            },
+          },
+        }),
         rolePolicy: [
           // Allow lookups in CodeBuild for the upstream synth (e.g. SSM
           // parameter context lookups).
@@ -249,6 +281,7 @@ export class PipelineStack extends Stack {
         wave,
         stage: stageConfig,
         input: synthStep,
+        upstreamSource,
         buildAndPushNukeImage: config.buildAndPushNukeImage ?? false,
         scope: this,
       });
@@ -269,9 +302,13 @@ export class PipelineStack extends Stack {
         topic.addSubscription(new EmailSubscription(email));
       }
       // CodeStar Notifications integration is added at synth time after the
-      // pipeline buildup has finished.
+      // pipeline buildup has finished. We pass an explicit short name because
+      // CodeStar Notifications enforces a 64-character limit on rule names
+      // and the CDK auto-generated name (which prefixes the construct path)
+      // can exceed that.
       this.pipeline.buildPipeline();
       this.pipeline.pipeline.notifyOn('PipelineFailures', topic, {
+        notificationRuleName: truncate(`${config.pipelineName}-failures`, 64),
         events: [
           codepipeline.PipelineNotificationEvents.PIPELINE_EXECUTION_FAILED,
           codepipeline.PipelineNotificationEvents.PIPELINE_EXECUTION_CANCELED,
@@ -280,4 +317,9 @@ export class PipelineStack extends Stack {
       });
     }
   }
+}
+
+/** Trim a string to at most maxLength characters. */
+function truncate(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : value.slice(0, maxLength);
 }

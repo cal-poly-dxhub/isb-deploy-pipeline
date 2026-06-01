@@ -14,6 +14,13 @@ const testConfig: PipelineConfig = {
     codestarConnectionArn:
       'arn:aws:codeconnections:us-east-1:000000000000:connection/abc-123',
   },
+  pipelineSource: {
+    owner: 'my-org',
+    repo: 'isb-deploy-pipeline',
+    branch: 'main',
+    codestarConnectionArn:
+      'arn:aws:codeconnections:us-east-1:000000000000:connection/abc-123',
+  },
   buildAndPushNukeImage: false,
   stages: [
     {

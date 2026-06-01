@@ -33,7 +33,7 @@ export function createNukeImageBuildStep(
   return new CodeBuildStep(`BuildNukeImage-${props.stageName}`, {
     input: props.input,
     commands: [
-      'set -euo pipefail',
+      'set -eu',
       'echo "==> Building AWS Nuke image for ' + props.stageName + '"',
       // Assume the ECR push role in the hub account.
       `CREDS=$(aws sts assume-role --role-arn arn:aws:iam::${props.hubAccount}:role/InnovationSandboxEcrPushRole --role-session-name pipeline-ecr-push)`,
@@ -55,7 +55,7 @@ export function createNukeImageBuildStep(
       PRIVATE_ECR_REPO_REGION: props.hubRegion,
     },
     buildEnvironment: {
-      buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
+      buildImage: codebuild.LinuxBuildImage.AMAZON_LINUX_2_5,
       computeType: codebuild.ComputeType.MEDIUM,
       privileged: true, // required for `docker build`
     },
