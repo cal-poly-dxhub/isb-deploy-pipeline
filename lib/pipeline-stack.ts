@@ -169,6 +169,8 @@ export class PipelineStack extends Stack {
             [`${prefix}_IDC_ACCOUNT`, stage.accounts.idc.account],
             [`${prefix}_HUB_ACCOUNT`, stage.accounts.hub.account],
             [`${prefix}_REGION`, stage.accounts.hub.region],
+            [`${prefix}_RUN_INTEGRATION_TESTS`, String(stage.runIntegrationTests ?? (stage.stageName === 'Dev'))],
+            [`${prefix}_REQUIRE_MANUAL_APPROVAL`, String(stage.requireManualApproval ?? (stage.stageName !== 'Dev'))],
             ...Object.entries(stage.envOverrides ?? {}).map(([k, v]) => [`${prefix}_${k}`, v]),
           ];
         }),
