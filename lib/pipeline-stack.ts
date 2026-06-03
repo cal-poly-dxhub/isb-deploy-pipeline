@@ -160,7 +160,7 @@ export class PipelineStack extends Stack {
       PIPELINE_GITHUB_OWNER: config.pipelineSource.owner,
       PIPELINE_GITHUB_REPO: config.pipelineSource.repo,
       PIPELINE_GITHUB_BRANCH: config.pipelineSource.branch,
-      // Stage accounts
+      // Stage config (prefixed per stage for loadPipelineConfig to read back)
       ...Object.fromEntries(
         config.stages.flatMap((stage) => {
           const prefix = stage.stageName.toUpperCase();
@@ -173,11 +173,10 @@ export class PipelineStack extends Stack {
           ];
         }),
       ),
-      // Upstream synth vars
+      // Upstream synth needs these unprefixed
       ORG_MGT_ACCOUNT_ID: firstStage.accounts.orgManagement.account,
       IDC_ACCOUNT_ID: firstStage.accounts.idc.account,
       HUB_ACCOUNT_ID: firstStage.accounts.hub.account,
-      ...(firstStage.envOverrides ?? {}),
     };
 
     const synthStep = new CodeBuildStep('Synth', {
