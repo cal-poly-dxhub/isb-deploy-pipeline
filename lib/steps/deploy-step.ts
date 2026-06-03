@@ -96,10 +96,9 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
       'node --version',
       'npm --version',
       'npm ci --no-audit --no-fund',
-      // The upstream CDK code reads CDK_DEFAULT_ACCOUNT/REGION via env. We
-      // have already set them above. We pass --require-approval never to
-      // avoid blocking on IAM change prompts.
-      `npx cdk deploy --app cdk.out --require-approval never --concurrency 4 InnovationSandbox-${capitalize(props.stack)} || npm run ${stackToScript[props.stack]} -- --require-approval never`,
+      // Synth the upstream CDK app from the infrastructure workspace, then deploy.
+      'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk synth',
+      `npx cdk deploy --app source/infrastructure/cdk.out --require-approval never --concurrency 4 InnovationSandbox-${capitalize(props.stack)}`,
     ],
     env: buildEnvVars,
     buildEnvironment: {
