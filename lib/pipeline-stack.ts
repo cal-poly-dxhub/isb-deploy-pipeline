@@ -149,6 +149,31 @@ export class PipelineStack extends Stack {
     const firstStage = config.stages[0];
     const synthEnv: Record<string, string> = {
       NODE_OPTIONS: '--max-old-space-size=8192',
+      // Pipeline config (needed for self-mutation cdk synth)
+      TOOLING_ACCOUNT: config.toolingEnv.account,
+      TOOLING_REGION: config.toolingEnv.region,
+      UPSTREAM_CODESTAR_CONNECTION_ARN: config.source.codestarConnectionArn!,
+      PIPELINE_CODESTAR_CONNECTION_ARN: config.pipelineSource.codestarConnectionArn!,
+      GITHUB_OWNER: config.source.owner,
+      GITHUB_REPO: config.source.repo,
+      GITHUB_BRANCH: config.source.branch,
+      PIPELINE_GITHUB_OWNER: config.pipelineSource.owner,
+      PIPELINE_GITHUB_REPO: config.pipelineSource.repo,
+      PIPELINE_GITHUB_BRANCH: config.pipelineSource.branch,
+      // Stage accounts
+      ...Object.fromEntries(
+        config.stages.flatMap((stage) => {
+          const prefix = stage.stageName.toUpperCase();
+          return [
+            [`${prefix}_ORG_MGT_ACCOUNT`, stage.accounts.orgManagement.account],
+            [`${prefix}_IDC_ACCOUNT`, stage.accounts.idc.account],
+            [`${prefix}_HUB_ACCOUNT`, stage.accounts.hub.account],
+            [`${prefix}_REGION`, stage.accounts.hub.region],
+            ...Object.entries(stage.envOverrides ?? {}).map(([k, v]) => [`${prefix}_${k}`, v]),
+          ];
+        }),
+      ),
+      // Upstream synth vars
       ORG_MGT_ACCOUNT_ID: firstStage.accounts.orgManagement.account,
       IDC_ACCOUNT_ID: firstStage.accounts.idc.account,
       HUB_ACCOUNT_ID: firstStage.accounts.hub.account,
@@ -178,7 +203,9 @@ export class PipelineStack extends Stack {
         'cd ../upstream/source/infrastructure && npx cdk synth --all --output ../../cdk.out',
         // Synth this pipeline
         'echo "==> Synth pipeline stack"',
+        'cd $CODEBUILD_SRC_DIR',
         'npm ci --no-audit --no-fund',
+        'npm run build',
         'npx cdk synth',
         'echo "==> Done"',
       ],
@@ -191,7 +218,7 @@ export class PipelineStack extends Stack {
       partialBuildSpec: codebuild.BuildSpec.fromObject({
         phases: {
           install: {
-            'runtime-versions': { nodejs: '20' },
+            'runtime-versions': { nodejs: '22' },
           },
         },
       }),
@@ -223,13 +250,13 @@ export class PipelineStack extends Stack {
           buildImage: codebuild.LinuxBuildImage.AMAZON_LINUX_2_5,
           computeType: codebuild.ComputeType.MEDIUM,
         },
-        // Force Node 20 for every CodeBuild project (deploy, self-mutate,
+        // Force Node 22 for every CodeBuild project (deploy, self-mutate,
         // asset publishing, integration tests). Upstream Innovation Sandbox
         // dependencies (vite@7.x and friends) require Node 20.19+.
         partialBuildSpec: codebuild.BuildSpec.fromObject({
           phases: {
             install: {
-              'runtime-versions': { nodejs: '20' },
+              'runtime-versions': { nodejs: '22' },
             },
           },
         }),
