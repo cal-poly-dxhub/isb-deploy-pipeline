@@ -1,5 +1,5 @@
 {
-  "app": "node bin/pipeline-app.js",
+  "app": "npx ts-node --prefer-ts-exts bin/pipeline-app.ts",
   "watch": {
     "include": ["**"],
     "exclude": [

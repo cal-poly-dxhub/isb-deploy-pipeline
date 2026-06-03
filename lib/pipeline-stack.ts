@@ -205,7 +205,6 @@ export class PipelineStack extends Stack {
         'echo "==> Synth pipeline stack"',
         'cd $CODEBUILD_SRC_DIR',
         'npm ci --no-audit --no-fund',
-        'npm run build',
         'npx cdk synth',
         'echo "==> Done"',
       ],
