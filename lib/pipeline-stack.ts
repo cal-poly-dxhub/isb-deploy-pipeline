@@ -238,6 +238,7 @@ export class PipelineStack extends Stack {
       synth: synthStep,
       crossAccountKeys: true, // creates per-account KMS keys for artifact decrypt
       selfMutation: true,
+      cliVersion: '2.167.1',
       dockerEnabledForSynth: true,
       dockerEnabledForSelfMutation: true,
       artifactBucket,
