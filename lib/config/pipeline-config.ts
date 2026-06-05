@@ -73,6 +73,10 @@ function listEnv(name: string): string[] {
  * it to this array and document it in `.env.example`.
  */
 const UPSTREAM_PASSTHROUGH_KEYS: ReadonlyArray<string> = [
+  // AccountPool stack parameters.
+  'PARENT_OU_ID',
+  'AWS_REGIONS',
+
   // IAM Identity Center wiring (required by the IDC and Compute stacks).
   'IDENTITY_STORE_ID',
   'SSO_INSTANCE_ARN',
