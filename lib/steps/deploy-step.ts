@@ -91,6 +91,14 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
     compute: 'InnovationSandbox-Compute',
   };
 
+  // Per-stack CloudFormation parameters and context flags (matching upstream deploy scripts)
+  const stackParams: Record<UpstreamStack, string> = {
+    'account-pool': '--parameters ParentOuId=$PARENT_OU_ID --parameters HubAccountId=$HUB_ACCOUNT_ID --parameters IsbManagedRegions=$AWS_REGIONS --context deploymentMode=${DEPLOYMENT_MODE:-STANDARD}',
+    idc: '--parameters IdentityStoreId=$IDENTITY_STORE_ID --parameters SsoInstanceArn=$SSO_INSTANCE_ARN --parameters OrgMgtAccountId=$ORG_MGT_ACCOUNT_ID --parameters HubAccountId=$HUB_ACCOUNT_ID --parameters AdminGroupName=${ADMIN_GROUP_NAME:-InnovationSandboxAdmins} --parameters ManagerGroupName=${MANAGER_GROUP_NAME:-InnovationSandboxManagers} --parameters UserGroupName=${USER_GROUP_NAME:-InnovationSandboxUsers}',
+    data: '--context deploymentMode=${DEPLOYMENT_MODE:-STANDARD} --context nukeConfigFilePath=${NUKE_CONFIG_FILE_PATH:-}',
+    compute: '--parameters OrgMgtAccountId=$ORG_MGT_ACCOUNT_ID --parameters IdcAccountId=$IDC_ACCOUNT_ID --parameters AcceptSolutionTermsOfUse=${ACCEPT_SOLUTION_TERMS_OF_USE:-true} --context deploymentMode=${DEPLOYMENT_MODE:-STANDARD} --context privateEcrRepo=${PRIVATE_ECR_REPO:-}',
+  };
+
   const step = new CodeBuildStep(`Deploy-${props.stageName}-${props.stack}`, {
     input: props.input,
     commands: [
@@ -102,7 +110,7 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
       'npm ci --no-audit --no-fund',
       // Synth the upstream CDK app from the infrastructure workspace, then deploy.
       'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk synth',
-      `npx cdk deploy --app source/infrastructure/cdk.out --require-approval never --concurrency 4 ${stackToCfnName[props.stack]}`,
+      `npx cdk deploy --app source/infrastructure/cdk.out --require-approval never --concurrency 4 ${stackToCfnName[props.stack]} ${stackParams[props.stack]}`,
     ],
     env: buildEnvVars,
     buildEnvironment: {
