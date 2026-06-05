@@ -84,12 +84,16 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
     ]),
   );
 
+  const stackToCfnName: Record<UpstreamStack, string> = {
+    'account-pool': 'InnovationSandbox-AccountPool',
+    idc: 'InnovationSandbox-IDC',
+    data: 'InnovationSandbox-Data',
+    compute: 'InnovationSandbox-Compute',
+  };
+
   const step = new CodeBuildStep(`Deploy-${props.stageName}-${props.stack}`, {
     input: props.input,
     commands: [
-      // CodeBuild's default Linux shell is dash (Ubuntu's /bin/sh), which
-      // does not support `set -o pipefail`. We use `set -eu` instead, which
-      // is portable across dash, sh, and bash.
       'set -eu',
       'echo "==> Deploying upstream stack: ' + props.stack + '"',
       'echo "==> Target: ' + props.targetAccount + ' / ' + props.targetRegion + '"',
@@ -98,7 +102,7 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
       'npm ci --no-audit --no-fund',
       // Synth the upstream CDK app from the infrastructure workspace, then deploy.
       'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk synth',
-      `npx cdk deploy --app source/infrastructure/cdk.out --require-approval never --concurrency 4 InnovationSandbox-${capitalize(props.stack)}`,
+      `npx cdk deploy --app source/infrastructure/cdk.out --require-approval never --concurrency 4 ${stackToCfnName[props.stack]}`,
     ],
     env: buildEnvVars,
     buildEnvironment: {
