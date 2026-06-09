@@ -92,11 +92,11 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
   };
 
   // Per-stack CloudFormation parameters and context flags (matching upstream deploy scripts)
-  const stackParams: Record<UpstreamStack, string> = {
-    'account-pool': '--parameters ParentOuId=$PARENT_OU_ID --parameters HubAccountId=$HUB_ACCOUNT_ID --parameters IsbManagedRegions=$AWS_REGIONS --context deploymentMode=${DEPLOYMENT_MODE:-STANDARD}',
-    idc: '--parameters IdentityStoreId=$IDENTITY_STORE_ID --parameters SsoInstanceArn=$SSO_INSTANCE_ARN --parameters OrgMgtAccountId=$ORG_MGT_ACCOUNT_ID --parameters HubAccountId=$HUB_ACCOUNT_ID --parameters AdminGroupName=${ADMIN_GROUP_NAME:-InnovationSandboxAdmins} --parameters ManagerGroupName=${MANAGER_GROUP_NAME:-InnovationSandboxManagers} --parameters UserGroupName=${USER_GROUP_NAME:-InnovationSandboxUsers}',
-    data: '--context deploymentMode=${DEPLOYMENT_MODE:-STANDARD} --context nukeConfigFilePath=${NUKE_CONFIG_FILE_PATH:-}',
-    compute: '--parameters OrgMgtAccountId=$ORG_MGT_ACCOUNT_ID --parameters IdcAccountId=$IDC_ACCOUNT_ID --parameters AcceptSolutionTermsOfUse=${ACCEPT_SOLUTION_TERMS_OF_USE:-Accept} --context deploymentMode=${DEPLOYMENT_MODE:-STANDARD} --context privateEcrRepo=${PRIVATE_ECR_REPO:-}',
+  const stackDeployCmd: Record<UpstreamStack, string> = {
+    'account-pool': 'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- deploy InnovationSandbox-AccountPool --require-approval=never --parameters ParentOuId=$PARENT_OU_ID --parameters HubAccountId=$HUB_ACCOUNT_ID --context deploymentMode=${DEPLOYMENT_MODE:-STANDARD} --parameters IsbManagedRegions=$AWS_REGIONS',
+    idc: 'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- deploy InnovationSandbox-IDC --require-approval=never --parameters IdentityStoreId=$IDENTITY_STORE_ID --parameters SsoInstanceArn=$SSO_INSTANCE_ARN --parameters OrgMgtAccountId=$ORG_MGT_ACCOUNT_ID --parameters HubAccountId=$HUB_ACCOUNT_ID --parameters AdminGroupName=${ADMIN_GROUP_NAME:-InnovationSandboxAdmins} --parameters ManagerGroupName=${MANAGER_GROUP_NAME:-InnovationSandboxManagers} --parameters UserGroupName=${USER_GROUP_NAME:-InnovationSandboxUsers}',
+    data: 'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- deploy InnovationSandbox-Data --require-approval=never --context deploymentMode=${DEPLOYMENT_MODE:-STANDARD} --context nukeConfigFilePath=${NUKE_CONFIG_FILE_PATH:-}',
+    compute: 'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- deploy InnovationSandbox-Compute --require-approval=never --parameters OrgMgtAccountId=$ORG_MGT_ACCOUNT_ID --parameters IdcAccountId=$IDC_ACCOUNT_ID --parameters AcceptSolutionTermsOfUse=${ACCEPT_SOLUTION_TERMS_OF_USE:-Accept} --context deploymentMode=${DEPLOYMENT_MODE:-STANDARD} --context privateEcrRepo=${PRIVATE_ECR_REPO:-}',
   };
 
   const step = new CodeBuildStep(`Deploy-${props.stageName}-${props.stack}`, {
@@ -107,11 +107,10 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
       'echo "==> Target: ' + props.targetAccount + ' / ' + props.targetRegion + '"',
       'node --version',
       'npm --version',
-      // Generate .env in repo root (upstream scripts do `source .env` from package root)
-      'printenv | grep -E "^(CDK_DEFAULT|ORG_MGT|IDC_|HUB_|NAMESPACE|IDENTITY_STORE|SSO_INSTANCE|ADMIN_GROUP|MANAGER_GROUP|USER_GROUP|ALLOWED_IP|AWS_NUKE|ACCEPT_SOLUTION|PARENT_OU|AWS_REGIONS|DEPLOYMENT_MODE|NUKE_CONFIG|PRIVATE_ECR)" | sed "s/^/export /" > .env || touch .env',
-      'echo "Generated .env:" && cat .env',
       'npm ci --no-audit --no-fund',
-      `npm run ${stackToScript[props.stack]}`,
+      // Synth then deploy (env vars are already set by CodeBuild)
+      'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk synth',
+      stackDeployCmd[props.stack],
     ],
     env: buildEnvVars,
     buildEnvironment: {
