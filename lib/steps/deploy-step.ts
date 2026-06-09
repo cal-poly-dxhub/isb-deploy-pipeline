@@ -25,6 +25,9 @@ export interface DeployStepProps {
   /** AWS region that the stack is deployed into. */
   readonly targetRegion: string;
 
+  /** The tooling account where the pipeline runs. Used to determine if cross-account role assumption is needed. */
+  readonly toolingAccount: string;
+
   /**
    * Environment variables to inject into the CodeBuild project. These are
    * forwarded to the upstream `cdk deploy` invocation and may include the
@@ -102,7 +105,7 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
   // Only assume a cross-account role if deploying to a different account than
   // the tooling account (where CodeBuild runs). For same-account deploys,
   // the CodeBuild role already has sufficient permissions.
-  const assumeRoleCommands = props.targetAccount !== (process.env.TOOLING_ACCOUNT ?? props.targetAccount)
+  const assumeRoleCommands = props.targetAccount !== props.toolingAccount
     ? [
         `CREDS=$(aws sts assume-role --role-arn arn:aws:iam::${props.targetAccount}:role/InnovationSandboxPipelineDeployRole --role-session-name cdk-deploy)`,
         'export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)',

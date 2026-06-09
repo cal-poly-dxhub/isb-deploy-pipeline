@@ -25,6 +25,9 @@ export interface InnovationSandboxWaveProps {
   /** If true, build & push the AWS Nuke Docker image before Compute deploy. */
   readonly buildAndPushNukeImage: boolean;
 
+  /** The tooling account ID (where the pipeline runs). */
+  readonly toolingAccount: string;
+
   /** Scope used to create stage-scoped SNS topics for approval notifications. */
   readonly scope: Construct;
 }
@@ -46,7 +49,7 @@ export interface InnovationSandboxWaveProps {
 export function addInnovationSandboxDeployment(
   props: InnovationSandboxWaveProps,
 ): void {
-  const { wave, stage, input, upstreamSource, buildAndPushNukeImage, scope } = props;
+  const { wave, stage, input, upstreamSource, buildAndPushNukeImage, toolingAccount, scope } = props;
 
   // 1. Optional manual approval gate at the front of the wave.
   let approvalStep: ManualApprovalStep | undefined;
@@ -63,6 +66,7 @@ export function addInnovationSandboxDeployment(
     stack: 'account-pool',
     stageName: stage.stageName,
     input: upstreamSource,
+    toolingAccount,
     targetAccount: stage.accounts.orgManagement.account,
     targetRegion: stage.accounts.orgManagement.region,
     envOverrides: {
@@ -82,6 +86,7 @@ export function addInnovationSandboxDeployment(
     stack: 'idc',
     stageName: stage.stageName,
     input: upstreamSource,
+    toolingAccount,
     targetAccount: stage.accounts.idc.account,
     targetRegion: stage.accounts.idc.region,
     envOverrides: {
@@ -98,6 +103,7 @@ export function addInnovationSandboxDeployment(
     stack: 'data',
     stageName: stage.stageName,
     input: upstreamSource,
+    toolingAccount,
     targetAccount: stage.accounts.hub.account,
     targetRegion: stage.accounts.hub.region,
     envOverrides: {
@@ -140,6 +146,7 @@ export function addInnovationSandboxDeployment(
     stack: 'compute',
     stageName: stage.stageName,
     input: upstreamSource,
+    toolingAccount,
     targetAccount: stage.accounts.hub.account,
     targetRegion: stage.accounts.hub.region,
     envOverrides: computeEnvOverrides,

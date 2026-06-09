@@ -289,6 +289,7 @@ export class PipelineStack extends Stack {
         input: synthStep,
         upstreamSource,
         buildAndPushNukeImage: config.buildAndPushNukeImage ?? false,
+        toolingAccount: config.toolingEnv.account,
         scope: this,
       });
     }

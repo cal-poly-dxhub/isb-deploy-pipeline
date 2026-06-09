@@ -201,9 +201,12 @@ The pipeline's `IntegrationTest-<Stage>` step does this automatically. It
 assumes a role named `InnovationSandboxIntegrationTestRole` in the hub
 account. Pre-create that role with:
 
-- A trust policy allowing the tooling account
-- Read-only policies for: cloudformation, apigateway, cloudfront, dynamodb,
-  appconfig, ecr, lambda, sts
+```bash
+# Run while authenticated to the Hub account
+aws iam create-role --role-name InnovationSandboxIntegrationTestRole --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::<tooling-account-id>:root"},"Action":"sts:AssumeRole"}]}'
+
+aws iam attach-role-policy --role-name InnovationSandboxIntegrationTestRole --policy-arn arn:aws:iam::aws:policy/ReadOnlyAccess
+```
 
 ### What the included tests cover
 
