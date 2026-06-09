@@ -107,10 +107,10 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
       'echo "==> Target: ' + props.targetAccount + ' / ' + props.targetRegion + '"',
       'node --version',
       'npm --version',
+      // Generate .env from CodeBuild environment (upstream scripts use `source .env`)
+      'env | grep -E "^(CDK_DEFAULT|ORG_MGT|IDC_|HUB_|NAMESPACE|IDENTITY_STORE|SSO_INSTANCE|ADMIN_GROUP|MANAGER_GROUP|USER_GROUP|ALLOWED_IP|AWS_NUKE|ACCEPT_SOLUTION|PARENT_OU|AWS_REGIONS|DEPLOYMENT_MODE|NUKE_CONFIG|PRIVATE_ECR)" > .env || true',
       'npm ci --no-audit --no-fund',
-      // Synth the upstream CDK app from the infrastructure workspace, then deploy.
-      'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk synth',
-      `npx cdk deploy --app source/infrastructure/cdk.out --require-approval never --concurrency 4 ${stackToCfnName[props.stack]} ${stackParams[props.stack]}`,
+      `npm run ${stackToScript[props.stack]}`,
     ],
     env: buildEnvVars,
     buildEnvironment: {

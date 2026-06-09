@@ -8,7 +8,8 @@ import {
 } from './environment-config';
 
 // Load variables from a .env file at the repository root if present. Variables
-// already set in the shell take precedence (override: false).
+// already set in the shell take precedence (override: false). This is used for
+// local development only. In CodeBuild, env vars come from SSM via the synth step.
 dotenv.config({
   path: path.resolve(__dirname, '..', '..', '.env'),
   override: false,

@@ -149,32 +149,6 @@ export class PipelineStack extends Stack {
     const firstStage = config.stages[0];
     const synthEnv: Record<string, string> = {
       NODE_OPTIONS: '--max-old-space-size=8192',
-      // Pipeline config (needed for self-mutation cdk synth)
-      TOOLING_ACCOUNT: config.toolingEnv.account,
-      TOOLING_REGION: config.toolingEnv.region,
-      UPSTREAM_CODESTAR_CONNECTION_ARN: config.source.codestarConnectionArn!,
-      PIPELINE_CODESTAR_CONNECTION_ARN: config.pipelineSource.codestarConnectionArn!,
-      GITHUB_OWNER: config.source.owner,
-      GITHUB_REPO: config.source.repo,
-      GITHUB_BRANCH: config.source.branch,
-      PIPELINE_GITHUB_OWNER: config.pipelineSource.owner,
-      PIPELINE_GITHUB_REPO: config.pipelineSource.repo,
-      PIPELINE_GITHUB_BRANCH: config.pipelineSource.branch,
-      // Stage config (prefixed per stage for loadPipelineConfig to read back)
-      ...Object.fromEntries(
-        config.stages.flatMap((stage) => {
-          const prefix = stage.stageName.toUpperCase();
-          return [
-            [`${prefix}_ORG_MGT_ACCOUNT`, stage.accounts.orgManagement.account],
-            [`${prefix}_IDC_ACCOUNT`, stage.accounts.idc.account],
-            [`${prefix}_HUB_ACCOUNT`, stage.accounts.hub.account],
-            [`${prefix}_REGION`, stage.accounts.hub.region],
-            [`${prefix}_RUN_INTEGRATION_TESTS`, String(stage.runIntegrationTests ?? (stage.stageName === 'Dev'))],
-            [`${prefix}_REQUIRE_MANUAL_APPROVAL`, String(stage.requireManualApproval ?? (stage.stageName !== 'Dev'))],
-            ...Object.entries(stage.envOverrides ?? {}).map(([k, v]) => [`${prefix}_${k}`, v]),
-          ];
-        }),
-      ),
       // Upstream synth needs these unprefixed
       ORG_MGT_ACCOUNT_ID: firstStage.accounts.orgManagement.account,
       IDC_ACCOUNT_ID: firstStage.accounts.idc.account,
@@ -205,6 +179,10 @@ export class PipelineStack extends Stack {
         // Synth this pipeline
         'echo "==> Synth pipeline stack"',
         'cd $CODEBUILD_SRC_DIR',
+        // Load config from SSM Parameter Store into environment
+        'echo "==> Loading config from SSM"',
+        'export ISB_CONFIG=$(aws ssm get-parameter --name /isb-pipeline/config --region us-west-2 --query Parameter.Value --output text)',
+        'eval $(echo $ISB_CONFIG | jq -r \'to_entries[] | "export \\(.key)=\\(.value)"\')',
         'npm ci --no-audit --no-fund',
         'npx cdk synth',
         'echo "==> Done"',
