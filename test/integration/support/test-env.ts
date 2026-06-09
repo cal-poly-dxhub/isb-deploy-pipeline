@@ -44,18 +44,17 @@ export function loadIntegrationEnv(): IntegrationTestEnv {
 
   const namespace = process.env.ISB_NAMESPACE ?? 'dev';
 
-  // The upstream solution names stacks "InnovationSandbox-<Component>" by
-  // default. If a NAMESPACE is configured, it's appended.
-  const suffix = namespace ? `-${namespace}` : '';
+  // The upstream solution names stacks "InnovationSandbox-<Component>" — the
+  // namespace is used internally within resources, not in the CFN stack name.
   return {
     hubRegion,
     orgMgtRegion,
     namespace,
     stackNames: {
-      accountPool: `InnovationSandbox-AccountPool${suffix}`,
-      idc: `InnovationSandbox-IDC${suffix}`,
-      data: `InnovationSandbox-Data${suffix}`,
-      compute: `InnovationSandbox-Compute${suffix}`,
+      accountPool: 'InnovationSandbox-AccountPool',
+      idc: 'InnovationSandbox-IDC',
+      data: 'InnovationSandbox-Data',
+      compute: 'InnovationSandbox-Compute',
     },
   };
 }
