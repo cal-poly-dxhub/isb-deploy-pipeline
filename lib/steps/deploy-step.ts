@@ -108,7 +108,11 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
       'node --version',
       'npm --version',
       'npm ci --no-audit --no-fund',
-      // Synth then deploy (env vars are already set by CodeBuild)
+      // Assume the CDK deploy role in the target account so CDK resolves the correct account
+      `CREDS=$(aws sts assume-role --role-arn arn:aws:iam::${props.targetAccount}:role/cdk-hnb659fds-deploy-role-${props.targetAccount}-${props.targetRegion} --role-session-name cdk-deploy)`,
+      'export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)',
+      'export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)',
+      'export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)',
       'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk synth',
       stackDeployCmd[props.stack],
     ],
