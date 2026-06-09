@@ -107,8 +107,9 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
       'echo "==> Target: ' + props.targetAccount + ' / ' + props.targetRegion + '"',
       'node --version',
       'npm --version',
-      // Generate .env from CodeBuild environment (upstream scripts use `source .env`)
-      'env | grep -E "^(CDK_DEFAULT|ORG_MGT|IDC_|HUB_|NAMESPACE|IDENTITY_STORE|SSO_INSTANCE|ADMIN_GROUP|MANAGER_GROUP|USER_GROUP|ALLOWED_IP|AWS_NUKE|ACCEPT_SOLUTION|PARENT_OU|AWS_REGIONS|DEPLOYMENT_MODE|NUKE_CONFIG|PRIVATE_ECR)" > .env || true',
+      // Generate .env in repo root (upstream scripts do `source .env` from package root)
+      'printenv | grep -E "^(CDK_DEFAULT|ORG_MGT|IDC_|HUB_|NAMESPACE|IDENTITY_STORE|SSO_INSTANCE|ADMIN_GROUP|MANAGER_GROUP|USER_GROUP|ALLOWED_IP|AWS_NUKE|ACCEPT_SOLUTION|PARENT_OU|AWS_REGIONS|DEPLOYMENT_MODE|NUKE_CONFIG|PRIVATE_ECR)" | sed "s/^/export /" > .env || touch .env',
+      'echo "Generated .env:" && cat .env',
       'npm ci --no-audit --no-fund',
       `npm run ${stackToScript[props.stack]}`,
     ],
