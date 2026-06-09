@@ -1,11 +1,12 @@
 import { Duration } from 'aws-cdk-lib';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import { CodeBuildStep, IFileSetProducer } from 'aws-cdk-lib/pipelines';
+import { CodeBuildStep, CodePipelineSource, IFileSetProducer } from 'aws-cdk-lib/pipelines';
 
 export interface IntegrationTestStepProps {
   readonly stageName: string;
-  readonly input: IFileSetProducer;
+  /** The pipeline repo source (has package.json, test files, package-lock.json). */
+  readonly input: CodePipelineSource;
   readonly hubAccount: string;
   readonly hubRegion: string;
   /** Namespace passed via ISB_NAMESPACE so test stack lookups resolve. */
@@ -48,10 +49,7 @@ export function createIntegrationTestStep(
       'export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)',
       'export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)',
       'export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)',
-      // Install dev dependencies (jest, ts-jest, AWS SDK clients).
       'npm ci --no-audit --no-fund',
-      // Run the integration project. --runInBand serialises tests so we
-      // don't burn API quota with parallel describe-stack calls.
       'npm run test:integration',
     ],
     env: {

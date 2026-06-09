@@ -22,6 +22,9 @@ export interface InnovationSandboxWaveProps {
   /** The upstream Innovation Sandbox source used by deploy/nuke steps. */
   readonly upstreamSource: CodePipelineSource;
 
+  /** The pipeline repo source (for integration tests). */
+  readonly pipelineSource: CodePipelineSource;
+
   /** If true, build & push the AWS Nuke Docker image before Compute deploy. */
   readonly buildAndPushNukeImage: boolean;
 
@@ -49,7 +52,7 @@ export interface InnovationSandboxWaveProps {
 export function addInnovationSandboxDeployment(
   props: InnovationSandboxWaveProps,
 ): void {
-  const { wave, stage, input, upstreamSource, buildAndPushNukeImage, toolingAccount, scope } = props;
+  const { wave, stage, input, upstreamSource, buildAndPushNukeImage, toolingAccount, pipelineSource, scope } = props;
 
   // 1. Optional manual approval gate at the front of the wave.
   let approvalStep: ManualApprovalStep | undefined;
@@ -157,7 +160,7 @@ export function addInnovationSandboxDeployment(
   if (stage.runIntegrationTests) {
     const testStep = createIntegrationTestStep({
       stageName: stage.stageName,
-      input,
+      input: pipelineSource,
       hubAccount: stage.accounts.hub.account,
       hubRegion: stage.accounts.hub.region,
       orgMgtRegion: stage.accounts.orgManagement.region,
