@@ -99,6 +99,18 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
     compute: 'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- deploy InnovationSandbox-Compute --require-approval=never --parameters OrgMgtAccountId=$ORG_MGT_ACCOUNT_ID --parameters IdcAccountId=$IDC_ACCOUNT_ID --parameters AcceptSolutionTermsOfUse=${ACCEPT_SOLUTION_TERMS_OF_USE:-Accept} --context deploymentMode=${DEPLOYMENT_MODE:-STANDARD} --context privateEcrRepo=${PRIVATE_ECR_REPO:-}',
   };
 
+  // Only assume a cross-account role if deploying to a different account than
+  // the tooling account (where CodeBuild runs). For same-account deploys,
+  // the CodeBuild role already has sufficient permissions.
+  const assumeRoleCommands = props.targetAccount !== (process.env.TOOLING_ACCOUNT ?? props.targetAccount)
+    ? [
+        `CREDS=$(aws sts assume-role --role-arn arn:aws:iam::${props.targetAccount}:role/InnovationSandboxPipelineDeployRole --role-session-name cdk-deploy)`,
+        'export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)',
+        'export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)',
+        'export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)',
+      ]
+    : [];
+
   const step = new CodeBuildStep(`Deploy-${props.stageName}-${props.stack}`, {
     input: props.input,
     commands: [
@@ -107,13 +119,8 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
       'echo "==> Target: ' + props.targetAccount + ' / ' + props.targetRegion + '"',
       'node --version',
       'npm --version',
-      // Assume admin role in the target account (same as deploying locally while authenticated to that account)
-      `CREDS=$(aws sts assume-role --role-arn arn:aws:iam::${props.targetAccount}:role/cdk-hnb659fds-cfn-exec-role-${props.targetAccount}-${props.targetRegion} --role-session-name cdk-deploy 2>/dev/null || aws sts assume-role --role-arn arn:aws:iam::${props.targetAccount}:role/OrganizationAccountAccessRole --role-session-name cdk-deploy)`,
-      'export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)',
-      'export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)',
-      'export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)',
+      ...assumeRoleCommands,
       'npm ci --no-audit --no-fund',
-      'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- bootstrap --require-approval=never || true',
       'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk synth',
       stackDeployCmd[props.stack],
     ],
