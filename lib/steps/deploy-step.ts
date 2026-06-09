@@ -145,6 +145,7 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
           `arn:aws:iam::${props.targetAccount}:role/cdk-*-lookup-role-*`,
           `arn:aws:iam::${props.targetAccount}:role/cdk-*-cfn-exec-role-*`,
           `arn:aws:iam::${props.targetAccount}:role/OrganizationAccountAccessRole`,
+          `arn:aws:iam::${props.targetAccount}:role/InnovationSandboxPipelineDeployRole`,
         ],
       }),
     ],

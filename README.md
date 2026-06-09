@@ -41,7 +41,23 @@ This creates the cross-account roles (`cdk-*-deploy-role-*`,
 `cdk-*-file-publishing-role-*`, etc.) that the pipeline assumes when running
 `cdk deploy`.
 
-### 3. (Optional) Pre-create the AWS Nuke ECR push role in each Hub account
+### 3. Create the pipeline deploy role in each cross-account target
+
+For any target account that is **different** from the tooling account (e.g. a
+separate Hub account), create an IAM role the pipeline can assume to deploy.
+Run these commands while authenticated to each such account:
+
+```bash
+aws iam create-role --role-name InnovationSandboxPipelineDeployRole --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::<tooling-account-id>:root"},"Action":"sts:AssumeRole"}]}'
+
+aws iam attach-role-policy --role-name InnovationSandboxPipelineDeployRole --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
+```
+
+This is required because the upstream Innovation Sandbox CDK app is designed
+for credential switching (not CDK cross-account deployment). The pipeline
+assumes this role to "become" the target account before running `cdk deploy`.
+
+### 4. (Optional) Pre-create the AWS Nuke ECR push role in each Hub account
 
 If `buildAndPushNukeImage: true`, each Hub account needs an IAM role named
 `InnovationSandboxEcrPushRole` that:
