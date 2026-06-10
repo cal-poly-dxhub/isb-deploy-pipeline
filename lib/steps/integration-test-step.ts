@@ -9,6 +9,8 @@ export interface IntegrationTestStepProps {
   readonly input: CodePipelineSource;
   readonly hubAccount: string;
   readonly hubRegion: string;
+  /** Org Management account ID. */
+  readonly orgMgtAccount: string;
   /** Namespace passed via ISB_NAMESPACE so test stack lookups resolve. */
   readonly namespace: string;
   /** Org Management region (for AWS Organizations tests). Defaults to hub. */
@@ -40,11 +42,15 @@ export interface IntegrationTestStepProps {
 export function createIntegrationTestStep(
   props: IntegrationTestStepProps,
 ): CodeBuildStep {
+  const orgMgtAccount = props.orgMgtAccount;
+  const sameAccount = orgMgtAccount === props.hubAccount;
+
   return new CodeBuildStep(`IntegrationTest-${props.stageName}`, {
     input: props.input,
     commands: [
       'set -eu',
       'echo "==> Running integration tests against ' + props.stageName + '"',
+      // Assume hub account role for the primary test credentials.
       `CREDS=$(aws sts assume-role --role-arn arn:aws:iam::${props.hubAccount}:role/InnovationSandboxIntegrationTestRole --role-session-name pipeline-integ-test --duration-seconds 3600)`,
       'export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)',
       'export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)',
@@ -55,6 +61,7 @@ export function createIntegrationTestStep(
     env: {
       ISB_HUB_REGION: props.hubRegion,
       ISB_NAMESPACE: props.namespace,
+      ISB_ORG_MGT_ACCOUNT: orgMgtAccount,
       ...(props.orgMgtRegion ? { ISB_ORG_MGT_REGION: props.orgMgtRegion } : {}),
       ...(props.privateEcrRepo
         ? { ISB_PRIVATE_ECR_REPO: props.privateEcrRepo }
@@ -71,6 +78,9 @@ export function createIntegrationTestStep(
         actions: ['sts:AssumeRole'],
         resources: [
           `arn:aws:iam::${props.hubAccount}:role/InnovationSandboxIntegrationTestRole`,
+          ...(sameAccount
+            ? []
+            : [`arn:aws:iam::${orgMgtAccount}:role/InnovationSandboxIntegrationTestRole`]),
         ],
       }),
     ],

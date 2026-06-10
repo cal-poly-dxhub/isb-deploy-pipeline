@@ -12,16 +12,17 @@ jest.setTimeout(120_000);
 const env = loadIntegrationEnv();
 
 describe('CloudFormation stacks', () => {
+  // AccountPool and IDC are in the org management account/region; Data and
+  // Compute are in the hub account/region.
+  const orgAcct = env.orgMgtAccount;
   describe.each([
-    ['AccountPool', env.stackNames.accountPool],
-    ['IDC', env.stackNames.idc],
-    ['Data', env.stackNames.data],
-    ['Compute', env.stackNames.compute],
-  ])('%s stack', (_label, stackName) => {
+    ['AccountPool', env.stackNames.accountPool, env.orgMgtRegion, orgAcct],
+    ['IDC', env.stackNames.idc, env.orgMgtRegion, orgAcct],
+    ['Data', env.stackNames.data, env.hubRegion, undefined],
+    ['Compute', env.stackNames.compute, env.hubRegion, undefined],
+  ])('%s stack', (_label, stackName, region, accountId) => {
     it(`exists and is in a healthy state`, async () => {
-      const stack = await describeStack(env.hubRegion, stackName);
-      // CloudFormation considers these "good" terminal states. ROLLBACK_*
-      // and FAILED states would mean the deploy step didn't actually succeed.
+      const stack = await describeStack(region, stackName, accountId);
       expect([
         'CREATE_COMPLETE',
         'UPDATE_COMPLETE',
@@ -31,10 +32,7 @@ describe('CloudFormation stacks', () => {
     });
 
     it('has a non-empty Outputs section', async () => {
-      const stack = await describeStack(env.hubRegion, stackName);
-      // Every upstream stack publishes at least one Output (e.g. table name,
-      // role ARN, distribution domain). An empty Outputs array would imply
-      // a regression.
+      const stack = await describeStack(region, stackName, accountId);
       expect(stack.Outputs?.length ?? 0).toBeGreaterThan(0);
     });
   });

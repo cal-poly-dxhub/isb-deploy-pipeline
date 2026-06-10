@@ -3,6 +3,7 @@ import {
   DescribeStacksCommand,
   Stack,
 } from '@aws-sdk/client-cloudformation';
+import { STSClient, AssumeRoleCommand } from '@aws-sdk/client-sts';
 
 /**
  * Configuration read from the environment when integration tests run.
@@ -12,24 +13,27 @@ import {
  *   ISB_HUB_REGION              region of the deployed Compute/Data stacks
  *   ISB_NAMESPACE               namespace prefix used in stack names (default
  *                               matches the stage name lowercased)
- *
- * Optional (only required by the Organizations test):
- *
- *   ISB_ORG_MGT_REGION          region of the deployed AccountPool stack;
+ *   ISB_ORG_MGT_ACCOUNT         org management account ID (for cross-account
+ *                               stack queries)
+ *   ISB_ORG_MGT_REGION          region of the deployed AccountPool/IDC stacks;
  *                               defaults to ISB_HUB_REGION
  *
  * If you run the tests locally, export them in your shell (or pass them via
- * `--env`) and make sure your AWS credentials point at the hub account (or,
- * for org-management tests, an account that can call AWS Organizations).
+ * `--env`) and make sure your AWS credentials point at the hub account.
  */
 export interface IntegrationTestEnv {
   readonly hubRegion: string;
   readonly orgMgtRegion: string;
+  readonly orgMgtAccount: string | undefined;
   readonly namespace: string;
   readonly stackNames: {
+    /** Deployed to org management account */
     readonly accountPool: string;
+    /** Deployed to IDC account (may be org mgmt or a separate account) */
     readonly idc: string;
+    /** Deployed to hub account */
     readonly data: string;
+    /** Deployed to hub account */
     readonly compute: string;
   };
 }
@@ -41,14 +45,14 @@ export function loadIntegrationEnv(): IntegrationTestEnv {
     'us-east-1';
 
   const orgMgtRegion = process.env.ISB_ORG_MGT_REGION ?? hubRegion;
+  const orgMgtAccount = process.env.ISB_ORG_MGT_ACCOUNT;
 
   const namespace = process.env.ISB_NAMESPACE ?? 'dev';
 
-  // The upstream solution names stacks "InnovationSandbox-<Component>" — the
-  // namespace is used internally within resources, not in the CFN stack name.
   return {
     hubRegion,
     orgMgtRegion,
+    orgMgtAccount,
     namespace,
     stackNames: {
       accountPool: 'InnovationSandbox-AccountPool',
@@ -62,29 +66,64 @@ export function loadIntegrationEnv(): IntegrationTestEnv {
 const cfnCache = new Map<string, Promise<Stack>>();
 
 /**
+ * Returns a CloudFormation client. If `accountId` is provided and differs from
+ * the current credentials, assumes InnovationSandboxIntegrationTestRole in
+ * that account first.
+ */
+async function getCfnClient(
+  region: string,
+  accountId?: string,
+): Promise<CloudFormationClient> {
+  if (!accountId) {
+    return new CloudFormationClient({ region });
+  }
+  const sts = new STSClient({ region });
+  const resp = await sts.send(
+    new AssumeRoleCommand({
+      RoleArn: `arn:aws:iam::${accountId}:role/InnovationSandboxIntegrationTestRole`,
+      RoleSessionName: 'integ-test-cross-account',
+    }),
+  );
+  return new CloudFormationClient({
+    region,
+    credentials: {
+      accessKeyId: resp.Credentials!.AccessKeyId!,
+      secretAccessKey: resp.Credentials!.SecretAccessKey!,
+      sessionToken: resp.Credentials!.SessionToken!,
+    },
+  });
+}
+
+/**
  * Fetches a CloudFormation stack description, caching results across tests.
- * Throws a descriptive error if the stack doesn't exist (which usually means
- * the deploy step didn't run or used a different namespace).
+ * Throws a descriptive error if the stack doesn't exist.
+ *
+ * @param region    AWS region to query
+ * @param stackName CloudFormation stack name
+ * @param accountId Optional account ID — if provided and different from the
+ *                  default credentials, assumes a cross-account role.
  */
 export async function describeStack(
   region: string,
   stackName: string,
+  accountId?: string,
 ): Promise<Stack> {
-  const cacheKey = `${region}/${stackName}`;
+  const cacheKey = `${accountId ?? 'default'}/${region}/${stackName}`;
   const cached = cfnCache.get(cacheKey);
   if (cached) {
     return cached;
   }
   const promise = (async () => {
-    const client = new CloudFormationClient({ region });
+    const client = await getCfnClient(region, accountId);
     const response = await client.send(
       new DescribeStacksCommand({ StackName: stackName }),
     );
     const stack = response.Stacks?.[0];
     if (!stack) {
       throw new Error(
-        `Stack ${stackName} not found in ${region}. ` +
-          `Was the deploy step run? Check ISB_NAMESPACE matches the stage.`,
+        `Stack ${stackName} not found in ${region}` +
+          (accountId ? ` (account ${accountId})` : '') +
+          `. Was the deploy step run?`,
       );
     }
     return stack;

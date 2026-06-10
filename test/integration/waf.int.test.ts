@@ -37,6 +37,7 @@ describe('WAF web ACL', () => {
       new ListWebACLsCommand({ Scope: 'REGIONAL' }),
     );
     const acl = response.WebACLs?.find((a) =>
+      (a.Name ?? '').toLowerCase().includes('isb') ||
       (a.Name ?? '').toLowerCase().includes('innovationsandbox'),
     );
     webAclId = acl?.Id;

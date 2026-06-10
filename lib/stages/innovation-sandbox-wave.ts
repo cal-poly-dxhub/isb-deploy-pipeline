@@ -163,6 +163,7 @@ export function addInnovationSandboxDeployment(
       input: pipelineSource,
       hubAccount: stage.accounts.hub.account,
       hubRegion: stage.accounts.hub.region,
+      orgMgtAccount: stage.accounts.orgManagement.account,
       orgMgtRegion: stage.accounts.orgManagement.region,
       privateEcrRepo: buildAndPushNukeImage
         ? `innovation-sandbox-${stage.stageName.toLowerCase()}`

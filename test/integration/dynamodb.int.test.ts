@@ -16,14 +16,16 @@ jest.setTimeout(120_000);
 const env = loadIntegrationEnv();
 
 describe('DynamoDB tables', () => {
-  // The upstream Data stack publishes outputs like LeaseTableName,
-  // AccountTable, ConfigTable. The exact set varies between minor versions,
-  // so we discover them dynamically.
+  // The upstream Data stack publishes outputs like LeaseTable,
+  // SandboxAccountTable, LeaseTemplateTable. The exact set varies between
+  // minor versions, so we discover them dynamically.
   const candidateOutputs = [
+    'LeaseTable',
+    'SandboxAccountTable',
+    'LeaseTemplateTable',
     'LeaseTableName',
     'AccountTableName',
     'ConfigTableName',
-    'UserTableName',
   ];
 
   test.each(candidateOutputs)(

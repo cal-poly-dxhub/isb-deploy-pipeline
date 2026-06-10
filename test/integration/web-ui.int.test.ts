@@ -9,7 +9,7 @@ import {
   GetDistributionCommand,
 } from '@aws-sdk/client-cloudfront';
 
-import { getStackOutput, loadIntegrationEnv } from './support/test-env';
+import { describeStack, loadIntegrationEnv } from './support/test-env';
 
 jest.setTimeout(120_000);
 
@@ -20,18 +20,26 @@ describe('Web UI (CloudFront)', () => {
   let webUrl: string | undefined;
 
   beforeAll(async () => {
-    distributionId = await getStackOutput(
-      env.hubRegion,
-      env.stackNames.compute,
-      'WebUiDistributionId',
-    );
+    const stack = await describeStack(env.hubRegion, env.stackNames.compute);
+    const outputs = stack.Outputs ?? [];
 
-    const domain = await getStackOutput(
-      env.hubRegion,
-      env.stackNames.compute,
-      'WebUiUrl',
+    const distOutput = outputs.find(
+      (o) =>
+        o.OutputKey === 'WebUiDistributionId' ||
+        o.OutputKey?.includes('DistributionId'),
     );
-    webUrl = domain ? domain.replace(/\/+$/, '') : undefined;
+    distributionId = distOutput?.OutputValue;
+
+    const urlOutput = outputs.find(
+      (o) =>
+        o.OutputKey === 'CloudFrontDistributionUrl' ||
+        o.OutputKey === 'WebUiUrl' ||
+        o.OutputKey?.includes('CloudFrontDistribution'),
+    );
+    const domain = urlOutput?.OutputValue;
+    webUrl = domain
+      ? (domain.startsWith('http') ? domain : `https://${domain}`).replace(/\/+$/, '')
+      : undefined;
   });
 
   it('CloudFront distribution exists and is Deployed', async () => {

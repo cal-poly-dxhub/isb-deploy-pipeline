@@ -14,7 +14,7 @@
  * minting a real IAM Identity Center token requires a test user and SAML
  * round-trip. That belongs in a longer-running functional test suite.
  */
-import { loadIntegrationEnv, requireStackOutput } from './support/test-env';
+import { describeStack, loadIntegrationEnv } from './support/test-env';
 
 jest.setTimeout(120_000);
 
@@ -24,27 +24,22 @@ describe('API Gateway', () => {
   let apiUrl: string;
 
   beforeAll(async () => {
-    // The upstream Compute stack publishes the API URL as one of these
-    // outputs depending on the version. Try them in order.
-    const candidates = ['ApiEndpoint', 'ApiGatewayUrl', 'RestApiUrl'];
-    let resolved: string | undefined;
-    for (const key of candidates) {
-      try {
-        resolved = await requireStackOutput(
-          env.hubRegion,
-          env.stackNames.compute,
-          key,
-        );
-        if (resolved) break;
-      } catch {
-        // try next
-      }
-    }
+    // The upstream Compute stack publishes the API URL. The output key
+    // contains a CDK hash suffix, so we match by prefix/substring.
+    const stack = await describeStack(env.hubRegion, env.stackNames.compute);
+    const output = (stack.Outputs ?? []).find(
+      (o) =>
+        o.OutputKey?.includes('RestApiEndpoint') ||
+        o.OutputKey === 'ApiEndpoint' ||
+        o.OutputKey === 'ApiGatewayUrl' ||
+        o.OutputKey === 'RestApiUrl',
+    );
+    const resolved = output?.OutputValue;
     if (!resolved) {
+      const keys = (stack.Outputs ?? []).map((o) => o.OutputKey).join(', ');
       throw new Error(
-        `Could not find an API URL output (tried: ${candidates.join(', ')}) ` +
-          `on stack ${env.stackNames.compute}. The upstream may have ` +
-          `renamed the output.`,
+        `Could not find an API URL output on stack ${env.stackNames.compute}. ` +
+          `Available outputs: ${keys}`,
       );
     }
     apiUrl = resolved.replace(/\/+$/, '');
