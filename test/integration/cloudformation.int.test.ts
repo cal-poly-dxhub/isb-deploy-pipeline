@@ -30,7 +30,13 @@ describe('CloudFormation stacks', () => {
         'UPDATE_COMPLETE_CLEANUP_IN_PROGRESS',
       ]).toContain(stack.StackStatus);
     });
+  });
 
+  // Only Data and Compute publish outputs; AccountPool and IDC do not.
+  describe.each([
+    ['Data', env.stackNames.data, env.hubRegion, undefined],
+    ['Compute', env.stackNames.compute, env.hubRegion, undefined],
+  ])('%s stack outputs', (_label, stackName, region, accountId) => {
     it('has a non-empty Outputs section', async () => {
       const stack = await describeStack(region, stackName, accountId);
       expect(stack.Outputs?.length ?? 0).toBeGreaterThan(0);
