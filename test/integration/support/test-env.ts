@@ -67,8 +67,8 @@ const cfnCache = new Map<string, Promise<Stack>>();
 
 /**
  * Returns a CloudFormation client. If `accountId` is provided and differs from
- * the current credentials, assumes InnovationSandboxIntegrationTestRole in
- * that account first.
+ * the hub account, uses the pre-assumed org mgmt credentials passed as env vars
+ * by the integration test step.
  */
 async function getCfnClient(
   region: string,
@@ -77,6 +77,19 @@ async function getCfnClient(
   if (!accountId) {
     return new CloudFormationClient({ region });
   }
+  // The integration test step pre-assumes the org mgmt role and passes
+  // credentials as ISB_ORG_MGT_AWS_* env vars.
+  const accessKeyId = process.env.ISB_ORG_MGT_AWS_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.ISB_ORG_MGT_AWS_SECRET_ACCESS_KEY;
+  const sessionToken = process.env.ISB_ORG_MGT_AWS_SESSION_TOKEN;
+  if (accessKeyId && secretAccessKey) {
+    return new CloudFormationClient({
+      region,
+      credentials: { accessKeyId, secretAccessKey, sessionToken },
+    });
+  }
+  // Fallback: try assuming the role directly (works when running locally
+  // with credentials that can assume cross-account roles).
   const sts = new STSClient({ region });
   const resp = await sts.send(
     new AssumeRoleCommand({

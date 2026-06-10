@@ -80,12 +80,28 @@ Example trust policy:
 }
 ```
 
-### 4. Create a CodeStar Connection to GitHub
+### 5. Create the integration test role in each account
+
+The pipeline runs post-deploy integration tests that query deployed resources.
+Create an `InnovationSandboxIntegrationTestRole` in **every account** that
+hosts Innovation Sandbox stacks (Hub, Org Management, and IDC if separate):
+
+```bash
+# Run while authenticated to EACH target account (Hub, Org Mgmt, IDC)
+aws iam create-role --role-name InnovationSandboxIntegrationTestRole --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::<tooling-account-id>:root"},"Action":"sts:AssumeRole"}]}'
+
+aws iam attach-role-policy --role-name InnovationSandboxIntegrationTestRole --policy-arn arn:aws:iam::aws:policy/ReadOnlyAccess
+```
+
+If the tooling account is the same as the Org Mgmt account, the trust policy
+trusts itself — this works fine.
+
+### 6. Create a CodeStar Connection to GitHub
 
 In the tooling account, go to **Developer Tools → Settings → Connections** and
 create a connection to your GitHub org. Copy the ARN.
 
-### 5. Configure your pipeline
+### 7. Configure your pipeline
 
 All pipeline configuration is read from environment variables (or a `.env`
 file at the repository root). Copy the template and fill in your values:
@@ -101,7 +117,8 @@ The most important variables:
 |---|---|---|
 | `TOOLING_ACCOUNT` | yes | 12-digit account where the pipeline runs |
 | `TOOLING_REGION` | no | Defaults to `us-east-1` |
-| `CODESTAR_CONNECTION_ARN` | yes | ARN from step 4 |
+| `UPSTREAM_CODESTAR_CONNECTION_ARN` | yes | ARN from step 6 (upstream repo) |
+| `PIPELINE_CODESTAR_CONNECTION_ARN` | yes | ARN from step 6 (this repo) |
 | `DEV_ORG_MGT_ACCOUNT`, `DEV_IDC_ACCOUNT`, `DEV_HUB_ACCOUNT` | one stage required | Account IDs for the Dev wave |
 | `STAGING_*` / `PROD_*` | optional | Same shape as Dev; omit any stage you don't need |
 | `BUILD_AND_PUSH_NUKE_IMAGE` | no | `true` to push a private AWS Nuke ECR image |
@@ -189,8 +206,9 @@ to assert on the *deployed* infrastructure.
 aws sts get-caller-identity
 
 # Point the suite at the right deployment.
-export ISB_HUB_REGION=us-east-1
+export ISB_HUB_REGION=us-west-2
 export ISB_NAMESPACE=dev          # matches NAMESPACE used during deploy
+export ISB_ORG_MGT_ACCOUNT=<org-management-account-id>
 
 npm run test:integration
 ```
@@ -198,15 +216,9 @@ npm run test:integration
 ### Running them in the pipeline
 
 The pipeline's `IntegrationTest-<Stage>` step does this automatically. It
-assumes a role named `InnovationSandboxIntegrationTestRole` in the hub
-account. Pre-create that role with:
-
-```bash
-# Run while authenticated to the Hub account
-aws iam create-role --role-name InnovationSandboxIntegrationTestRole --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::<tooling-account-id>:root"},"Action":"sts:AssumeRole"}]}'
-
-aws iam attach-role-policy --role-name InnovationSandboxIntegrationTestRole --policy-arn arn:aws:iam::aws:policy/ReadOnlyAccess
-```
+assumes `InnovationSandboxIntegrationTestRole` in both the hub account and
+the org management account. Pre-create the role in **each** account (see
+step 5 above).
 
 ### What the included tests cover
 

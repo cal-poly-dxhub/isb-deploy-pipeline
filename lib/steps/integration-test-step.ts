@@ -45,12 +45,27 @@ export function createIntegrationTestStep(
   const orgMgtAccount = props.orgMgtAccount;
   const sameAccount = orgMgtAccount === props.hubAccount;
 
+  // When hub and org mgmt are different accounts, assume the org mgmt role
+  // FIRST (from the CodeBuild role, which has permission) and stash its
+  // credentials as env vars for the test code. Then assume the hub role as
+  // the default credentials.
+  const orgMgtRoleCommands = sameAccount
+    ? []
+    : [
+        `ORG_CREDS=$(aws sts assume-role --role-arn arn:aws:iam::${orgMgtAccount}:role/InnovationSandboxIntegrationTestRole --role-session-name pipeline-integ-org --duration-seconds 3600)`,
+        'export ISB_ORG_MGT_AWS_ACCESS_KEY_ID=$(echo $ORG_CREDS | jq -r .Credentials.AccessKeyId)',
+        'export ISB_ORG_MGT_AWS_SECRET_ACCESS_KEY=$(echo $ORG_CREDS | jq -r .Credentials.SecretAccessKey)',
+        'export ISB_ORG_MGT_AWS_SESSION_TOKEN=$(echo $ORG_CREDS | jq -r .Credentials.SessionToken)',
+      ];
+
   return new CodeBuildStep(`IntegrationTest-${props.stageName}`, {
     input: props.input,
     commands: [
       'set -eu',
       'echo "==> Running integration tests against ' + props.stageName + '"',
-      // Assume hub account role for the primary test credentials.
+      // Assume org mgmt role first (while we still have CodeBuild role creds).
+      ...orgMgtRoleCommands,
+      // Then assume hub role as default credentials.
       `CREDS=$(aws sts assume-role --role-arn arn:aws:iam::${props.hubAccount}:role/InnovationSandboxIntegrationTestRole --role-session-name pipeline-integ-test --duration-seconds 3600)`,
       'export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)',
       'export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)',
