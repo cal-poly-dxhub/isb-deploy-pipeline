@@ -8,9 +8,6 @@
  *                     credentials and a deployed Innovation Sandbox install.
  *                     Run via `npm run test:integration` after a deploy.
  *
- *   - "functional"  : end-to-end tests that create/terminate leases and
- *                     exercise the full lifecycle. Gated on RUN_FUNCTIONAL_TESTS=true.
- *                     Run via `npm run test:functional`.
  *
  * The pipeline's IntegrationTest CodeBuild step invokes the integration
  * project after Compute deploys, with credentials assumed in the hub account.
@@ -22,7 +19,7 @@ module.exports = {
       testEnvironment: 'node',
       roots: ['<rootDir>/test'],
       testMatch: ['<rootDir>/test/*.test.ts'],
-      testPathIgnorePatterns: ['/node_modules/', '/test/integration/', '/test/functional/'],
+      testPathIgnorePatterns: ['/node_modules/', '/test/integration/'],
       transform: {
         '^.+\\.tsx?$': 'ts-jest',
       },

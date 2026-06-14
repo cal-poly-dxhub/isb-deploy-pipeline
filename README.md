@@ -253,10 +253,37 @@ step 5 above).
 5. Run `npm run test:integration` against your dev environment to confirm
    they pass before merging.
 
-For destructive or end-to-end functional tests (creating leases, exercising
-the cleanup workflow), put them in a separate `test/functional/` directory and
-gate them behind a `RUN_FUNCTIONAL_TESTS=true` env var so they don't run on
-Prod by default.
+## Functional Tests
+
+End-to-end tests that create leases, access sandbox accounts, and terminate
+leases. They are **destructive** (mutate live state) and run manually in three
+stages with human approval between each.
+
+### Setup
+
+```bash
+cp test/functional/.env.functional.example test/functional/.env.functional
+# Fill in: ISB_API_URL, ISB_API_TOKEN (from browser sessionStorage "isb-jwt"),
+#          AWS credentials for the hub account
+```
+
+### Running
+
+```bash
+# Stage 1: Create lease template and lease an account
+npm run test:functional -- --testPathPattern=setup
+
+# → Log into the sandbox account via the SSO portal
+# → Copy credentials into .env.functional (ISB_SANDBOX_AWS_*)
+
+# Stage 2: Validate sandbox access (Bedrock, S3, EC2)
+npm run test:functional -- --testPathPattern=sandbox
+
+# Stage 3: Terminate lease, wait for cleanup, remove template
+npm run test:functional -- --testPathPattern=teardown
+```
+
+State is persisted in `test/functional/.functional-state.json` between stages.
 
 ## Customisation
 

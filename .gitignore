@@ -17,3 +17,5 @@ dist/
 coverage/
 *.tsbuildinfo
 .cdk.staging
+.env.functional
+.functional-state.json
