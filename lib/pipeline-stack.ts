@@ -66,7 +66,9 @@ export class PipelineStack extends Stack {
     Tags.of(this).add('Project', 'InnovationSandbox');
     Tags.of(this).add('Component', 'CICD');
     Tags.of(this).add('ManagedBy', 'CDK');
-
+    // Config hash forces self-mutation when SSM config changes
+    const configHash = this.node.tryGetContext('configHash') ?? 'local';
+    Tags.of(this).add('ConfigHash', configHash);
     // ------------------------------------------------------------------
     // 1. Encryption + artifact bucket
     // ------------------------------------------------------------------
@@ -184,7 +186,7 @@ export class PipelineStack extends Stack {
         'export ISB_CONFIG=$(aws ssm get-parameter --name /isb-pipeline/config --region us-west-2 --query Parameter.Value --output text)',
         'eval $(echo $ISB_CONFIG | jq -r \'to_entries[] | "export \\(.key)=\\(.value)"\')',
         'npm ci --no-audit --no-fund',
-        'npx cdk synth',
+        'npx cdk synth --context configHash=$(echo $ISB_CONFIG | md5sum | cut -d" " -f1)',
         'echo "==> Done"',
       ],
       env: synthEnv,
