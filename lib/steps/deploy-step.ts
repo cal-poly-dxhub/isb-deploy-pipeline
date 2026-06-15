@@ -103,9 +103,10 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
   // the tooling account (where CodeBuild runs). For same-account deploys,
   // the CodeBuild role already has sufficient permissions.
   const deployTimeoutMinutes = 120;
+  const assumeRoleDurationSeconds = 3600; // Capped at role's MaxSessionDuration
   const assumeRoleCommands = props.targetAccount !== props.toolingAccount
     ? [
-        `CREDS=$(aws sts assume-role --role-arn arn:aws:iam::${props.targetAccount}:role/InnovationSandboxPipelineDeployRole --role-session-name cdk-deploy --duration-seconds ${deployTimeoutMinutes * 60})`,
+        `CREDS=$(aws sts assume-role --role-arn arn:aws:iam::${props.targetAccount}:role/InnovationSandboxPipelineDeployRole --role-session-name cdk-deploy --duration-seconds ${assumeRoleDurationSeconds})`,
         'export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)',
         'export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)',
         'export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)',
