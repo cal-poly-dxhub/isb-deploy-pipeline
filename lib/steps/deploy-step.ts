@@ -87,27 +87,25 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
     ]),
   );
 
-  const stackToCfnName: Record<UpstreamStack, string> = {
-    'account-pool': 'InnovationSandbox-AccountPool',
-    idc: 'InnovationSandbox-IDC',
-    data: 'InnovationSandbox-Data',
-    compute: 'InnovationSandbox-Compute',
-  };
-
-  // Per-stack CloudFormation parameters and context flags (matching upstream deploy scripts)
+  // Per-stack CloudFormation parameters and context flags (matching upstream deploy scripts).
+  // These are intentionally explicit (not calling `npm run deploy:*`) because we need to
+  // inject cross-account role assumption and custom env vars the upstream scripts don't support.
+  // Review and update when bumping the upstream version.
+  // Last verified against: upstream release/v1.2.9
   const stackDeployCmd: Record<UpstreamStack, string> = {
-    'account-pool': 'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- deploy InnovationSandbox-AccountPool --require-approval=never --parameters ParentOuId=$PARENT_OU_ID --parameters HubAccountId=$HUB_ACCOUNT_ID --context deploymentMode=${DEPLOYMENT_MODE:-STANDARD} --parameters IsbManagedRegions=$AWS_REGIONS',
-    idc: 'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- deploy InnovationSandbox-IDC --require-approval=never --parameters IdentityStoreId=$IDENTITY_STORE_ID --parameters SsoInstanceArn=$SSO_INSTANCE_ARN --parameters OrgMgtAccountId=$ORG_MGT_ACCOUNT_ID --parameters HubAccountId=$HUB_ACCOUNT_ID --parameters AdminGroupName=${ADMIN_GROUP_NAME:-InnovationSandboxAdmins} --parameters ManagerGroupName=${MANAGER_GROUP_NAME:-InnovationSandboxManagers} --parameters UserGroupName=${USER_GROUP_NAME:-InnovationSandboxUsers}',
+    'account-pool': 'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- deploy InnovationSandbox-AccountPool --require-approval=never --parameters ParentOuId=${PARENT_OU_ID:?PARENT_OU_ID is required} --parameters HubAccountId=${HUB_ACCOUNT_ID:?HUB_ACCOUNT_ID is required} --context deploymentMode=${DEPLOYMENT_MODE:-STANDARD} --parameters IsbManagedRegions=${AWS_REGIONS:?AWS_REGIONS is required}',
+    idc: 'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- deploy InnovationSandbox-IDC --require-approval=never --parameters IdentityStoreId=${IDENTITY_STORE_ID:?IDENTITY_STORE_ID is required} --parameters SsoInstanceArn=${SSO_INSTANCE_ARN:?SSO_INSTANCE_ARN is required} --parameters OrgMgtAccountId=${ORG_MGT_ACCOUNT_ID:?ORG_MGT_ACCOUNT_ID is required} --parameters HubAccountId=${HUB_ACCOUNT_ID:?HUB_ACCOUNT_ID is required} --parameters AdminGroupName=${ADMIN_GROUP_NAME:-InnovationSandboxAdmins} --parameters ManagerGroupName=${MANAGER_GROUP_NAME:-InnovationSandboxManagers} --parameters UserGroupName=${USER_GROUP_NAME:-InnovationSandboxUsers}',
     data: 'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- deploy InnovationSandbox-Data --require-approval=never --context deploymentMode=${DEPLOYMENT_MODE:-STANDARD} --context nukeConfigFilePath=${NUKE_CONFIG_FILE_PATH:-}',
-    compute: 'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- deploy InnovationSandbox-Compute --require-approval=never --parameters OrgMgtAccountId=$ORG_MGT_ACCOUNT_ID --parameters IdcAccountId=$IDC_ACCOUNT_ID --parameters AcceptSolutionTermsOfUse=${ACCEPT_SOLUTION_TERMS_OF_USE:-Accept} --context deploymentMode=${DEPLOYMENT_MODE:-STANDARD} --context privateEcrRepo=${PRIVATE_ECR_REPO:-}',
+    compute: 'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- deploy InnovationSandbox-Compute --require-approval=never --parameters OrgMgtAccountId=${ORG_MGT_ACCOUNT_ID:?ORG_MGT_ACCOUNT_ID is required} --parameters IdcAccountId=${IDC_ACCOUNT_ID:?IDC_ACCOUNT_ID is required} --parameters AcceptSolutionTermsOfUse=${ACCEPT_SOLUTION_TERMS_OF_USE:-Accept} --context deploymentMode=${DEPLOYMENT_MODE:-STANDARD} --context privateEcrRepo=${PRIVATE_ECR_REPO:-}',
   };
 
   // Only assume a cross-account role if deploying to a different account than
   // the tooling account (where CodeBuild runs). For same-account deploys,
   // the CodeBuild role already has sufficient permissions.
+  const deployTimeoutMinutes = 120;
   const assumeRoleCommands = props.targetAccount !== props.toolingAccount
     ? [
-        `CREDS=$(aws sts assume-role --role-arn arn:aws:iam::${props.targetAccount}:role/InnovationSandboxPipelineDeployRole --role-session-name cdk-deploy)`,
+        `CREDS=$(aws sts assume-role --role-arn arn:aws:iam::${props.targetAccount}:role/InnovationSandboxPipelineDeployRole --role-session-name cdk-deploy --duration-seconds ${deployTimeoutMinutes * 60})`,
         'export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)',
         'export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)',
         'export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)',
@@ -134,7 +132,7 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
       privileged: false,
       environmentVariables: buildEnvironmentVariables,
     },
-    timeout: Duration.minutes(240),
+    timeout: Duration.minutes(deployTimeoutMinutes),
     rolePolicyStatements: [
       // Allow CodeBuild to assume the CDK bootstrap roles in the target
       // account. CDK bootstrap creates roles with predictable name patterns.

@@ -86,7 +86,7 @@ export function createIntegrationTestStep(
       buildImage: codebuild.LinuxBuildImage.AMAZON_LINUX_2_5,
       computeType: codebuild.ComputeType.SMALL,
     },
-    timeout: Duration.minutes(60),
+    timeout: Duration.minutes(15),
     rolePolicyStatements: [
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,

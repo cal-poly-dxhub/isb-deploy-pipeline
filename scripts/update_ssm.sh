@@ -19,6 +19,7 @@ done | jq -Rn '[inputs | split("\t") | {(.[0]): .[1]}] | add')
 aws ssm put-parameter \
   --name "$PARAM_NAME" \
   --type String \
+  --tier Intelligent-Tiering \
   --region "$REGION" \
   --overwrite \
   --value "$JSON"

@@ -24,6 +24,10 @@ import { Construct } from 'constructs';
 import { PipelineConfig } from './config/environment-config';
 import { addInnovationSandboxDeployment } from './stages/innovation-sandbox-wave';
 
+/** Centralized version constants to prevent drift across pipeline steps. */
+const NODEJS_VERSION = '22';
+const CDK_CLI_VERSION = '2.167.1';
+
 export interface PipelineStackProps extends StackProps {
   readonly config: PipelineConfig;
 }
@@ -165,7 +169,7 @@ export class PipelineStack extends Stack {
       installCommands: [
         'set -eu',
         'echo "Node $(node --version), npm $(npm --version)"',
-        'npm install -g aws-cdk@2.167.1',
+        `npm install -g aws-cdk@${CDK_CLI_VERSION}`,
       ],
       commands: [
         'set -eu',
@@ -184,7 +188,8 @@ export class PipelineStack extends Stack {
         // Load config from SSM Parameter Store into environment
         'echo "==> Loading config from SSM"',
         `export ISB_CONFIG=$(aws ssm get-parameter --name /isb-pipeline/config --region ${config.toolingEnv.region} --query Parameter.Value --output text)`,
-        'eval $(echo $ISB_CONFIG | jq -r \'to_entries[] | "export \\(.key)=\\\"\\(.value)\\\""\')',
+        'echo "$ISB_CONFIG" | jq -r \'to_entries[] | "\\(.key)=\'\\\'\'\\(.value)\\\'\\\'\'"\'  > /tmp/isb.env',
+        'set -a && source /tmp/isb.env && set +a',
         'npm ci --no-audit --no-fund',
         'npx cdk synth --context configHash=$(echo $ISB_CONFIG | md5sum | cut -d" " -f1)',
         'echo "==> Done"',
@@ -198,11 +203,11 @@ export class PipelineStack extends Stack {
       partialBuildSpec: codebuild.BuildSpec.fromObject({
         phases: {
           install: {
-            'runtime-versions': { nodejs: '22' },
+            'runtime-versions': { nodejs: NODEJS_VERSION },
           },
         },
       }),
-      timeout: Duration.minutes(120),
+      timeout: Duration.minutes(30),
       primaryOutputDirectory: 'cdk.out',
     });
 
@@ -220,7 +225,7 @@ export class PipelineStack extends Stack {
       synth: synthStep,
       crossAccountKeys: true, // creates per-account KMS keys for artifact decrypt
       selfMutation: true,
-      cliVersion: '2.167.1',
+      cliVersion: CDK_CLI_VERSION,
       dockerEnabledForSynth: true,
       dockerEnabledForSelfMutation: true,
       artifactBucket,
@@ -237,7 +242,7 @@ export class PipelineStack extends Stack {
         partialBuildSpec: codebuild.BuildSpec.fromObject({
           phases: {
             install: {
-              'runtime-versions': { nodejs: '22' },
+              'runtime-versions': { nodejs: NODEJS_VERSION },
             },
           },
         }),
@@ -276,7 +281,7 @@ export class PipelineStack extends Stack {
             prefix: 'codebuild',
           },
         },
-        timeout: Duration.minutes(240),
+        timeout: Duration.minutes(60),
       },
     });
 
