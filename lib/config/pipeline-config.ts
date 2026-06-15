@@ -8,7 +8,8 @@ import {
 } from './environment-config';
 
 // Load variables from a .env file at the repository root if present. Variables
-// already set in the shell take precedence (override: false).
+// already set in the shell take precedence (override: false). This is used for
+// local development only. In CodeBuild, env vars come from SSM via the synth step.
 dotenv.config({
   path: path.resolve(__dirname, '..', '..', '.env'),
   override: false,
@@ -65,6 +66,38 @@ function listEnv(name: string): string[] {
 }
 
 /**
+ * The set of "well-known" upstream Innovation Sandbox environment variables.
+ * Each one can be set per-stage via `<PREFIX>_<KEY>` in `.env`. If set, the
+ * value is forwarded to the upstream `cdk deploy` invocation as `<KEY>`.
+ *
+ * If the upstream solution requires a variable that is not listed here, add
+ * it to this array and document it in `.env.example`.
+ */
+const UPSTREAM_PASSTHROUGH_KEYS: ReadonlyArray<string> = [
+  // AccountPool stack parameters.
+  'PARENT_OU_ID',
+  'AWS_REGIONS',
+
+  // IAM Identity Center wiring (required by the IDC and Compute stacks).
+  'IDENTITY_STORE_ID',
+  'SSO_INSTANCE_ARN',
+
+  // IDC group name overrides (optional; upstream provides defaults).
+  'ADMIN_GROUP_NAME',
+  'MANAGER_GROUP_NAME',
+  'USER_GROUP_NAME',
+
+  // Network/security tuning.
+  'ALLOWED_IP_ADDRESSES',
+
+  // Cleanup behavior tuning.
+  'AWS_NUKE_DRY_RUN_MODE',
+
+  // Required ToS acknowledgement on some upstream releases.
+  'ACCEPT_SOLUTION_TERMS_OF_USE',
+];
+
+/**
  * Builds an AwsEnvironment for a stage by reading <PREFIX>_ORG_MGT_ACCOUNT,
  * <PREFIX>_IDC_ACCOUNT, <PREFIX>_HUB_ACCOUNT and the per-stage region (with
  * fallback to the global default region).
@@ -88,6 +121,19 @@ function readStage(
   const region = optionalEnv(`${prefix}_REGION`, defaultRegion)!;
   const env = (account: string): AwsEnvironment => ({ account, region });
 
+  // Start with NAMESPACE then layer in any well-known upstream vars that
+  // happen to be set for this stage. Variables left unset are simply not
+  // forwarded (the upstream uses its built-in defaults).
+  const envOverrides: Record<string, string> = {
+    NAMESPACE: optionalEnv(`${prefix}_NAMESPACE`, stageName.toLowerCase())!,
+  };
+  for (const key of UPSTREAM_PASSTHROUGH_KEYS) {
+    const value = optionalEnv(`${prefix}_${key}`);
+    if (value) {
+      envOverrides[key] = value;
+    }
+  }
+
   return {
     stageName,
     accounts: {
@@ -104,9 +150,7 @@ function readStage(
       `${prefix}_RUN_INTEGRATION_TESTS`,
       stageName === 'Dev',
     ),
-    envOverrides: {
-      NAMESPACE: optionalEnv(`${prefix}_NAMESPACE`, stageName.toLowerCase())!,
-    },
+    envOverrides,
   };
 }
 
@@ -147,7 +191,13 @@ export function loadPipelineConfig(): PipelineConfig {
       owner: optionalEnv('GITHUB_OWNER', 'aws-solutions')!,
       repo: optionalEnv('GITHUB_REPO', 'innovation-sandbox-on-aws')!,
       branch: optionalEnv('GITHUB_BRANCH', 'main')!,
-      codestarConnectionArn: requireEnv('CODESTAR_CONNECTION_ARN'),
+      codestarConnectionArn: requireEnv('UPSTREAM_CODESTAR_CONNECTION_ARN'),
+    },
+    pipelineSource: {
+      owner: requireEnv('PIPELINE_GITHUB_OWNER'),
+      repo: requireEnv('PIPELINE_GITHUB_REPO'),
+      branch: optionalEnv('PIPELINE_GITHUB_BRANCH', 'main')!,
+      codestarConnectionArn: requireEnv('PIPELINE_CODESTAR_CONNECTION_ARN'),
     },
     buildAndPushNukeImage: booleanEnv('BUILD_AND_PUSH_NUKE_IMAGE', false),
     notificationEmails: listEnv('NOTIFICATION_EMAILS'),

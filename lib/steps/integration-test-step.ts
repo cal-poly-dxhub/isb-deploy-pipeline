@@ -1,58 +1,101 @@
 import { Duration } from 'aws-cdk-lib';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import { CodeBuildStep, IFileSetProducer } from 'aws-cdk-lib/pipelines';
+import { CodeBuildStep, CodePipelineSource, IFileSetProducer } from 'aws-cdk-lib/pipelines';
 
 export interface IntegrationTestStepProps {
   readonly stageName: string;
-  readonly input: IFileSetProducer;
+  /** The pipeline repo source (has package.json, test files, package-lock.json). */
+  readonly input: CodePipelineSource;
   readonly hubAccount: string;
   readonly hubRegion: string;
+  /** Org Management account ID. */
+  readonly orgMgtAccount: string;
+  /** Namespace passed via ISB_NAMESPACE so test stack lookups resolve. */
+  readonly namespace: string;
+  /** Org Management region (for AWS Organizations tests). Defaults to hub. */
+  readonly orgMgtRegion?: string;
+  /**
+   * Private ECR repository name. If set, the ECR integration test runs;
+   * otherwise the test is skipped.
+   */
+  readonly privateEcrRepo?: string;
 }
 
 /**
- * Runs post-deployment smoke tests against the freshly deployed Innovation
- * Sandbox installation. Examples of useful checks:
+ * Runs the integration test suite (`npm run test:integration`) against the
+ * freshly deployed Innovation Sandbox installation in the hub account.
  *
- *   - Verify CloudFormation stack outputs include the expected web UI URL.
- *   - Hit the API Gateway health endpoint and assert 401 without auth (sanity).
- *   - Verify the AWS Nuke ECR image is present (when private repo is enabled).
- *   - Verify the AppConfig hosted configuration version resolves successfully.
+ * The test suite lives in `test/integration/` of THIS pipeline repo. It uses
+ * the AWS SDK to assert on the deployed CloudFormation, API Gateway,
+ * CloudFront, DynamoDB, and AppConfig resources.
  *
- * The actual test logic should live in the upstream repo (e.g. a future
- * `npm run test:integration` script). This step is a thin runner that assumes
- * a read-only role in the hub account and executes those tests.
+ * The CodeBuild project assumes the `InnovationSandboxIntegrationTestRole` in
+ * the hub account, which must:
+ *
+ *   - Trust the tooling account (or this pipeline's CodeBuild role)
+ *   - Have read-only access to: cloudformation, apigateway, cloudfront,
+ *     dynamodb, appconfig, ecr, lambda
+ *
+ * Failure of any test fails the pipeline stage.
  */
 export function createIntegrationTestStep(
   props: IntegrationTestStepProps,
 ): CodeBuildStep {
+  const orgMgtAccount = props.orgMgtAccount;
+  const sameAccount = orgMgtAccount === props.hubAccount;
+
+  // When hub and org mgmt are different accounts, assume the org mgmt role
+  // FIRST (from the CodeBuild role, which has permission) and stash its
+  // credentials as env vars for the test code. Then assume the hub role as
+  // the default credentials.
+  const orgMgtRoleCommands = sameAccount
+    ? []
+    : [
+        `ORG_CREDS=$(aws sts assume-role --role-arn arn:aws:iam::${orgMgtAccount}:role/InnovationSandboxIntegrationTestRole --role-session-name pipeline-integ-org --duration-seconds 3600)`,
+        'export ISB_ORG_MGT_AWS_ACCESS_KEY_ID=$(echo $ORG_CREDS | jq -r .Credentials.AccessKeyId)',
+        'export ISB_ORG_MGT_AWS_SECRET_ACCESS_KEY=$(echo $ORG_CREDS | jq -r .Credentials.SecretAccessKey)',
+        'export ISB_ORG_MGT_AWS_SESSION_TOKEN=$(echo $ORG_CREDS | jq -r .Credentials.SessionToken)',
+      ];
+
   return new CodeBuildStep(`IntegrationTest-${props.stageName}`, {
     input: props.input,
     commands: [
-      'set -euo pipefail',
+      'set -eu',
       'echo "==> Running integration tests against ' + props.stageName + '"',
-      `CREDS=$(aws sts assume-role --role-arn arn:aws:iam::${props.hubAccount}:role/InnovationSandboxIntegrationTestRole --role-session-name pipeline-integ-test)`,
+      // Assume org mgmt role first (while we still have CodeBuild role creds).
+      ...orgMgtRoleCommands,
+      // Then assume hub role as default credentials.
+      `CREDS=$(aws sts assume-role --role-arn arn:aws:iam::${props.hubAccount}:role/InnovationSandboxIntegrationTestRole --role-session-name pipeline-integ-test --duration-seconds 3600)`,
       'export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)',
       'export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)',
       'export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)',
       'npm ci --no-audit --no-fund',
-      // The upstream repo does not currently expose a separate integration
-      // test script, so we run the unit/snapshot tests as a baseline guard
-      // and log the deployed stack outputs for manual inspection.
-      'npm test -- --reporter=default',
-      `aws cloudformation describe-stacks --region ${props.hubRegion} --stack-name InnovationSandbox-Compute --query "Stacks[0].Outputs" --output table || true`,
+      'npm run test:integration',
     ],
+    env: {
+      ISB_HUB_REGION: props.hubRegion,
+      ISB_NAMESPACE: props.namespace,
+      ISB_ORG_MGT_ACCOUNT: orgMgtAccount,
+      ...(props.orgMgtRegion ? { ISB_ORG_MGT_REGION: props.orgMgtRegion } : {}),
+      ...(props.privateEcrRepo
+        ? { ISB_PRIVATE_ECR_REPO: props.privateEcrRepo }
+        : {}),
+    },
     buildEnvironment: {
-      buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
+      buildImage: codebuild.LinuxBuildImage.AMAZON_LINUX_2_5,
       computeType: codebuild.ComputeType.SMALL,
     },
-    timeout: Duration.minutes(60),
+    timeout: Duration.minutes(15),
     rolePolicyStatements: [
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
         actions: ['sts:AssumeRole'],
         resources: [
           `arn:aws:iam::${props.hubAccount}:role/InnovationSandboxIntegrationTestRole`,
+          ...(sameAccount
+            ? []
+            : [`arn:aws:iam::${orgMgtAccount}:role/InnovationSandboxIntegrationTestRole`]),
         ],
       }),
     ],
