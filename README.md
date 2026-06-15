@@ -141,9 +141,23 @@ npm test
 npm run deploy:pipeline
 ```
 
-After the first deploy, the pipeline becomes self-mutating. Push changes to
-either this repo (pipeline definition) or the upstream Innovation Sandbox repo
-to trigger a new run.
+After the first deploy the pipeline becomes self-mutating. Configuration lives
+in SSM Parameter Store (`/isb-pipeline/config`). Update it by editing `.env`
+and running:
+
+```bash
+./scripts/update_ssm.sh
+```
+
+The script reads `TOOLING_REGION` from `.env` to target the correct region.
+On the next pipeline run, the synth step loads from SSM and self-mutation
+applies any changes (including source branch updates).
+
+> **First deploy only:** `npm run deploy:pipeline` reads from `.env` directly.
+> After that, push config changes via SSM and let self-mutation handle it.
+
+Push changes to either this repo (pipeline definition) or the upstream
+Innovation Sandbox repo to trigger a new run.
 
 ## Dual-Source Architecture
 
@@ -179,15 +193,29 @@ access to both repositories. Configure them via:
 │       ├── deploy-step.ts           # Reusable per-stack deploy step
 │       ├── nuke-image-step.ts       # AWS Nuke ECR build/push
 │       └── integration-test-step.ts # Post-deploy smoke tests
+├── scripts/
+│   └── update_ssm.sh               # Push .env config to SSM Parameter Store
 ├── test/
 │   ├── pipeline-stack.test.ts       # Unit tests (no AWS calls)
-│   └── integration/                 # Integration tests (real AWS calls)
-│       ├── support/test-env.ts
-│       ├── cloudformation.int.test.ts
-│       ├── api-gateway.int.test.ts
-│       ├── web-ui.int.test.ts
-│       ├── dynamodb.int.test.ts
-│       └── appconfig.int.test.ts
+│   ├── integration/                 # Integration tests (real AWS calls)
+│   │   ├── support/test-env.ts
+│   │   ├── cloudformation.int.test.ts
+│   │   ├── api-gateway.int.test.ts
+│   │   ├── web-ui.int.test.ts
+│   │   ├── dynamodb.int.test.ts
+│   │   ├── appconfig.int.test.ts
+│   │   ├── lambda.int.test.ts
+│   │   ├── step-functions.int.test.ts
+│   │   ├── eventbridge.int.test.ts
+│   │   ├── waf.int.test.ts
+│   │   ├── ecr.int.test.ts
+│   │   └── organizations.int.test.ts
+│   └── functional/                  # Functional tests (destructive, manual)
+│       ├── .env.functional.example
+│       ├── helpers.ts
+│       ├── setup.func.test.ts
+│       ├── sandbox.func.test.ts
+│       └── teardown.func.test.ts
 ├── cdk.json
 ├── package.json
 └── tsconfig.json
