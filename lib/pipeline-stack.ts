@@ -183,7 +183,7 @@ export class PipelineStack extends Stack {
         'cd $CODEBUILD_SRC_DIR',
         // Load config from SSM Parameter Store into environment
         'echo "==> Loading config from SSM"',
-        'export ISB_CONFIG=$(aws ssm get-parameter --name /isb-pipeline/config --region us-west-2 --query Parameter.Value --output text)',
+        `export ISB_CONFIG=$(aws ssm get-parameter --name /isb-pipeline/config --region ${config.toolingEnv.region} --query Parameter.Value --output text)`,
         'eval $(echo $ISB_CONFIG | jq -r \'to_entries[] | "export \\(.key)=\\(.value)"\')',
         'npm ci --no-audit --no-fund',
         'npx cdk synth --context configHash=$(echo $ISB_CONFIG | md5sum | cut -d" " -f1)',
