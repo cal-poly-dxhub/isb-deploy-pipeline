@@ -188,7 +188,7 @@ export class PipelineStack extends Stack {
         // Load config from SSM Parameter Store into environment
         'echo "==> Loading config from SSM"',
         `export ISB_CONFIG=$(aws ssm get-parameter --name /isb-pipeline/config --region ${config.toolingEnv.region} --query Parameter.Value --output text)`,
-        'echo "$ISB_CONFIG" | jq -r \'to_entries[] | "\\(.key)=\'\\\'\'\\(.value)\\\'\\\'\'"\'  > /tmp/isb.env',
+        "echo \"$ISB_CONFIG\" | python3 -c \"import sys,json; [print(f\\\"{k}='{v}'\\\") for k,v in json.loads(sys.stdin.read()).items()]\" > /tmp/isb.env",
         'set -a && source /tmp/isb.env && set +a',
         'npm ci --no-audit --no-fund',
         'npx cdk synth --context configHash=$(echo $ISB_CONFIG | md5sum | cut -d" " -f1)',
