@@ -4,7 +4,7 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENV_FILE="${1:-$SCRIPT_DIR/../.env}"
 PARAM_NAME="/isb-pipeline/config"
-REGION="${AWS_REGION:-us-west-2}"
+REGION="${AWS_REGION:-$(grep -m1 '^TOOLING_REGION=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo 'us-west-2')}"
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "Error: $ENV_FILE not found" >&2
