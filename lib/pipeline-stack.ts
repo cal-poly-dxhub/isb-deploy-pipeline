@@ -317,6 +317,12 @@ export class PipelineStack extends Stack {
       // and the CDK auto-generated name (which prefixes the construct path)
       // can exceed that.
       this.pipeline.buildPipeline();
+
+      // Force SUPERSEDED execution mode so new runs cancel old ones
+      const cfnPipeline = this.pipeline.pipeline.node.defaultChild as codepipeline.CfnPipeline;
+      cfnPipeline.addPropertyOverride('ExecutionMode', 'SUPERSEDED');
+      cfnPipeline.addPropertyOverride('PipelineType', 'V2');
+
       this.pipeline.pipeline.notifyOn('PipelineFailures', topic, {
         notificationRuleName: truncate(`${config.pipelineName}-failures`, 64),
         events: [
