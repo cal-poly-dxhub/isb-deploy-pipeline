@@ -328,6 +328,20 @@ export class PipelineStack extends Stack {
       cfnPipeline.addPropertyOverride('ExecutionMode', 'SUPERSEDED');
       cfnPipeline.addPropertyOverride('PipelineType', 'V2');
 
+      // Trigger pipeline on pushes to the upstream repo (primary source
+      // triggers automatically, additional sources need explicit triggers)
+      cfnPipeline.addPropertyOverride('Triggers', [
+        {
+          ProviderType: 'CodeStarSourceConnection',
+          GitConfiguration: {
+            SourceActionName: this.pipeline.pipeline.stages[0].actions
+              .find((a) => a.actionProperties.actionName.includes('aws-solutions'))
+              ?.actionProperties.actionName,
+            Push: [{ Branches: { Includes: [config.source.branch] } }],
+          },
+        },
+      ]);
+
       this.pipeline.pipeline.notifyOn('PipelineFailures', topic, {
         notificationRuleName: truncate(`${config.pipelineName}-failures`, 64),
         events: [
