@@ -291,18 +291,30 @@ stages with human approval between each.
 
 ```bash
 cp test/functional/.env.functional.example test/functional/.env.functional
-# Fill in: ISB_API_URL, ISB_API_TOKEN (from browser sessionStorage "isb-jwt"),
-#          AWS credentials for the hub account
 ```
+
+Fill in the following values:
+
+| Variable | Where to get it |
+|---|---|
+| `ISB_API_URL` | `https://<your-cloudfront-or-domain>/api` |
+| `ISB_API_TOKEN` | Browser → DevTools → Application → Session Storage → `isb-jwt` |
+| `ISB_LEASE_TEMPLATE_ID` | Create one in the ISB UI, or leave blank (setup stage creates one) |
+| `AWS_ACCESS_KEY_ID` / `SECRET` / `TOKEN` | Hub account credentials (for CloudFormation queries) |
+| `ISB_HUB_REGION` | Region where ISB is deployed (e.g. `us-west-2`) |
+| `ISB_NAMESPACE` | Namespace used during deploy (e.g. `myisb`, `prod`) |
 
 ### Running
 
 ```bash
-# Stage 1: Create lease template and lease an account
+# Stage 1: Create a lease template and lease an account
 npm run test:functional -- --testPathPattern=setup
 
 # → Log into the sandbox account via the SSO portal
-# → Copy credentials into .env.functional (ISB_SANDBOX_AWS_*)
+# → Copy credentials into .env.functional:
+#   ISB_SANDBOX_AWS_ACCESS_KEY_ID=...
+#   ISB_SANDBOX_AWS_SECRET_ACCESS_KEY=...
+#   ISB_SANDBOX_AWS_SESSION_TOKEN=...
 
 # Stage 2: Validate sandbox access (Bedrock, S3, EC2)
 npm run test:functional -- --testPathPattern=sandbox
@@ -312,6 +324,9 @@ npm run test:functional -- --testPathPattern=teardown
 ```
 
 State is persisted in `test/functional/.functional-state.json` between stages.
+
+> **Note:** The JWT expires after 60 minutes. If a stage takes too long, refresh
+> the JWT in `.env.functional` before running the next stage.
 
 ## Customisation
 
