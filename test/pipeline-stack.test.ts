@@ -164,6 +164,20 @@ describe('PipelineStack', () => {
     }
   });
 
+  it('publishes the diff as UTF-8 so the box-drawing tree renders', () => {
+    // Without an explicit charset the browser guesses (often windows-1252) and
+    // cdk diff's │├─└ characters come out as mojibake.
+    const projects = template.findResources('AWS::CodeBuild::Project');
+    const diff = Object.values(projects).find((p) =>
+      JSON.stringify(p.Properties.Source?.BuildSpec ?? '').includes(
+        'render_stage_diff.sh',
+      ),
+    );
+    expect(diff).toBeDefined();
+    const buildSpec = JSON.stringify(diff!.Properties.Source.BuildSpec);
+    expect(buildSpec).toContain('text/plain; charset=utf-8');
+  });
+
   it('scopes the diff step to the named deploy role and the diffs/ prefix', () => {
     const policies = template.findResources('AWS::IAM::Policy');
     const diffPolicy = Object.entries(policies).find(([name]) =>

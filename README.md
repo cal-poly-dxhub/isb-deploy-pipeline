@@ -254,6 +254,56 @@ link to that object in both `ExternalEntityLink` (the clickable link on the
 console approval dialog) and `CustomData` (so it also appears in the approval
 notification email).
 
+### What's in the diff file
+
+A raw `cdk diff` of this solution is dominated by churn that changes on *every*
+build — rebuilt Lambda bundles show up as `Code.S3Key`, `aws:asset:path` and
+`asset.<hash>` differences. Left unfiltered that trains reviewers to skim past
+everything, including the parts that matter. So the file leads with a summary and
+keeps the raw output below it:
+
+```
+Innovation Sandbox - pending changes
+====================================
+Generated:       2026-08-06T19:02:25Z
+Upstream commit: abc1234
+Namespace:       dev
+Solution version: SO0284: v1.2.12 -> v1.2.15
+
+>> This diff contains replacements, removals, IAM changes or errors.
+>> Read the summary below before approving.
+
+SUMMARY
+-------
+InnovationSandbox-Data (333333333333/us-west-2)
+  resources: +1  -1  ~2
+  !! 2 line(s) mention replacement/destruction - REVIEW CAREFULLY
+       [~] AWS::DynamoDB::Table LeaseTable LeaseTable123 may be replaced
+        └─ [~] TableName (requires replacement)
+  !! resources are being REMOVED:
+       [-] AWS::SQS::Queue OldQueue OldQueueXYZ
+  !  IAM / security-group changes present
+```
+
+The summary surfaces, per stack:
+
+| Signal | Why it matters |
+|---|---|
+| `+ / - / ~` resource counts | Scale of the change at a glance |
+| Replacement / destruction lines | A replaced DynamoDB table means lease state is recreated — the single most important thing to catch |
+| Removed resources | Deletions are irreversible |
+| IAM / security-group changes | `cdk diff` prints dedicated tables when permissions broaden |
+| Parameter / output changes | Alters how the four stacks wire together |
+| Solution version | A `USER_AGENT_EXTRA` bump means the upstream solution itself moved |
+
+A banner at the top states whether any of those were found, so an approval with
+nothing but asset churn is obvious without reading further. The full per-stack
+`cdk diff` follows under `FULL DIFF`.
+
+The file is uploaded as `text/plain; charset=utf-8`. The charset matters: `cdk
+diff` draws its tree with box-drawing characters, and without it browsers fall
+back to a locale default and render `│` as `â”‚`.
+
 A fixed `latest.txt` per stage is unambiguous rather than racy: CodePipeline
 locks a stage while it holds an execution, so only one execution can ever be
 sitting at a given stage's approval.
