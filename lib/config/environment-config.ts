@@ -159,4 +159,17 @@ export interface PipelineConfig {
    * @default true
    */
   readonly triggerOnConfigChange?: boolean;
+
+  /**
+   * If true, a Lambda rejects a pending manual approval when a newer execution
+   * is blocked behind it.
+   *
+   * SUPERSEDED mode only supersedes executions between stages, so an execution
+   * parked on an approval holds its stage lock and newer executions queue up as
+   * inbound indefinitely (up to the non-configurable seven-day approval
+   * timeout). Rejecting the stale approval releases the lock.
+   *
+   * @default true
+   */
+  readonly unblockStaleApprovals?: boolean;
 }

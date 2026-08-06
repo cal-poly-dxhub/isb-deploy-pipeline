@@ -3,6 +3,8 @@ import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { CodeBuildStep, IFileSetProducer } from 'aws-cdk-lib/pipelines';
 
+import { CONFIG_INPUT_DIR, stageConfigPath } from '../config/stage-config-file';
+
 /**
  * Logical identifier for one of the four upstream stacks. The values match the
  * upstream `npm run deploy:<value>` scripts.
@@ -13,11 +15,17 @@ export interface DeployStepProps {
   /** The upstream stack this step is responsible for. */
   readonly stack: UpstreamStack;
 
-  /** Pipeline stage name (e.g. "Dev"). Used only for naming. */
+  /** Pipeline stage name (e.g. "Dev"). Selects the stage config file. */
   readonly stageName: string;
 
   /** Output of the synth/build step that produced the cloud assembly. */
   readonly input: IFileSetProducer;
+
+  /**
+   * The synth output, mounted as an additional input so the step can source
+   * `isb-config-<stage>.env` at runtime.
+   */
+  readonly configFileSet: IFileSetProducer;
 
   /** AWS account that the stack is deployed into. */
   readonly targetAccount: string;
@@ -29,13 +37,15 @@ export interface DeployStepProps {
   readonly toolingAccount: string;
 
   /**
-   * Environment variables to inject into the CodeBuild project. These are
-   * forwarded to the upstream `cdk deploy` invocation and may include the
-   * variables documented in the upstream `.env.example` (e.g. NAMESPACE,
-   * HUB_ACCOUNT_ID, ORG_MGT_ACCOUNT_ID, IDC_ACCOUNT_ID, IDENTITY_STORE_ID,
-   * SSO_INSTANCE_ARN, etc.).
+   * Environment variables baked into the CodeBuild project.
+   *
+   * Reserve this for values that are already structural (i.e. that change the
+   * pipeline definition anyway, such as the private ECR repo which only exists
+   * when the nuke image step is enabled). Ordinary per-stage configuration must
+   * NOT go here - it belongs in the stage config file so that changing it does
+   * not force a self-mutation. See lib/config/stage-config-file.ts.
    */
-  readonly envOverrides?: Record<string, string>;
+  readonly staticEnv?: Record<string, string>;
 
   /**
    * Steps that must complete successfully before this step runs. Used to
@@ -68,7 +78,7 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
     compute: 'deploy:compute',
   };
 
-  const envOverrides = props.envOverrides ?? {};
+  const envOverrides = props.staticEnv ?? {};
   const buildEnvVars: Record<string, string> = {
     CDK_DEFAULT_ACCOUNT: props.targetAccount,
     CDK_DEFAULT_REGION: props.targetRegion,
@@ -113,14 +123,26 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
       ]
     : [];
 
+  const configPath = stageConfigPath(props.stageName);
+
   const step = new CodeBuildStep(`Deploy-${props.stageName}-${props.stack}`, {
     input: props.input,
+    additionalInputs: {
+      [CONFIG_INPUT_DIR]: props.configFileSet,
+    },
     commands: [
       'set -eu',
       'echo "==> Deploying upstream stack: ' + props.stack + '"',
       'echo "==> Target: ' + props.targetAccount + ' / ' + props.targetRegion + '"',
       'node --version',
       'npm --version',
+      // Per-stage config is read from the synth artifact at runtime, not baked
+      // into this project's environment. A config-only change therefore does
+      // not alter the pipeline definition.
+      `if [ ! -f "${configPath}" ]; then echo "ERROR: ${configPath} is missing from the synth artifact. Run ./scripts/update_ssm.sh so the config parameter exists, then re-run the pipeline." >&2; exit 1; fi`,
+      `echo "==> Loading stage config from ${configPath}"`,
+      `set -a && . "${configPath}" && set +a`,
+      'echo "==> NAMESPACE=${NAMESPACE:-<unset>} ORG_MGT_ACCOUNT_ID=${ORG_MGT_ACCOUNT_ID:-<unset>} IDC_ACCOUNT_ID=${IDC_ACCOUNT_ID:-<unset>} HUB_ACCOUNT_ID=${HUB_ACCOUNT_ID:-<unset>}"',
       ...assumeRoleCommands,
       'npm ci --no-audit --no-fund',
       'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk synth',

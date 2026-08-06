@@ -5,6 +5,7 @@ import { Construct } from 'constructs';
 
 import { DeploymentStageConfig } from '../config/environment-config';
 import { createDeployStep } from '../steps/deploy-step';
+import { createDiffStep, stageDiffUrl } from '../steps/diff-step';
 import { createIntegrationTestStep } from '../steps/integration-test-step';
 import { createNukeImageBuildStep } from '../steps/nuke-image-step';
 import { IFileSetProducer } from 'aws-cdk-lib/pipelines';
@@ -33,6 +34,18 @@ export interface InnovationSandboxWaveProps {
 
   /** Scope used to create stage-scoped SNS topics for approval notifications. */
   readonly scope: Construct;
+
+  /** Bucket the pre-approval `cdk diff` is published to. */
+  readonly diffBucketName: string;
+
+  /** ARN of that bucket. */
+  readonly diffBucketArn: string;
+
+  /** ARN of the KMS key the bucket is encrypted with. */
+  readonly diffKeyArn: string;
+
+  /** Region the pipeline (and diff bucket) live in. */
+  readonly toolingRegion: string;
 }
 
 /**
@@ -54,13 +67,58 @@ export function addInnovationSandboxDeployment(
 ): void {
   const { wave, stage, input, upstreamSource, buildAndPushNukeImage, toolingAccount, pipelineSource, scope } = props;
 
-  // 1. Optional manual approval gate at the front of the wave.
+  // 1. Optional manual approval gate at the front of the wave, preceded by a
+  //    `cdk diff` so the reviewer can see exactly what they are authorising.
   let approvalStep: ManualApprovalStep | undefined;
   if (stage.requireManualApproval) {
-    createApprovalTopic(scope, stage); // surfaces an SNS topic for ops
-    approvalStep = new ManualApprovalStep(`Approve-${stage.stageName}`, {
-      comment: `Approve deployment to ${stage.stageName}. Review the synth diff before approving.`,
+    const diffStep = createDiffStep({
+      stageName: stage.stageName,
+      input: upstreamSource,
+      pipelineSource,
+      configFileSet: input,
+      targets: [
+        {
+          stack: 'InnovationSandbox-AccountPool',
+          account: stage.accounts.orgManagement.account,
+          region: stage.accounts.orgManagement.region,
+        },
+        {
+          stack: 'InnovationSandbox-IDC',
+          account: stage.accounts.idc.account,
+          region: stage.accounts.idc.region,
+        },
+        {
+          stack: 'InnovationSandbox-Data',
+          account: stage.accounts.hub.account,
+          region: stage.accounts.hub.region,
+        },
+        {
+          stack: 'InnovationSandbox-Compute',
+          account: stage.accounts.hub.account,
+          region: stage.accounts.hub.region,
+        },
+      ],
+      diffBucketName: props.diffBucketName,
+      diffBucketArn: props.diffBucketArn,
+      diffKeyArn: props.diffKeyArn,
+      region: props.toolingRegion,
+      toolingAccount,
     });
+    wave.addPre(diffStep);
+
+    createApprovalTopic(scope, stage); // surfaces an SNS topic for ops
+    const diffUrl = stageDiffUrl(
+      stage.stageName,
+      props.diffBucketName,
+      props.toolingRegion,
+    );
+    approvalStep = new ManualApprovalStep(`Approve-${stage.stageName}`, {
+      comment:
+        `Approve deployment to ${stage.stageName}. Review the diff before ` +
+        `approving: ${diffUrl}`,
+    });
+    // The diff must be published before the approval starts waiting.
+    approvalStep.addStepDependency(diffStep);
     wave.addPre(approvalStep);
   }
 
@@ -69,15 +127,10 @@ export function addInnovationSandboxDeployment(
     stack: 'account-pool',
     stageName: stage.stageName,
     input: upstreamSource,
+    configFileSet: input,
     toolingAccount,
     targetAccount: stage.accounts.orgManagement.account,
     targetRegion: stage.accounts.orgManagement.region,
-    envOverrides: {
-      ...stage.envOverrides,
-      ORG_MGT_ACCOUNT_ID: stage.accounts.orgManagement.account,
-      IDC_ACCOUNT_ID: stage.accounts.idc.account,
-      HUB_ACCOUNT_ID: stage.accounts.hub.account,
-    },
   });
   // The approval must complete before AccountPool starts.
   if (approvalStep) {
@@ -89,15 +142,10 @@ export function addInnovationSandboxDeployment(
     stack: 'idc',
     stageName: stage.stageName,
     input: upstreamSource,
+    configFileSet: input,
     toolingAccount,
     targetAccount: stage.accounts.idc.account,
     targetRegion: stage.accounts.idc.region,
-    envOverrides: {
-      ...stage.envOverrides,
-      ORG_MGT_ACCOUNT_ID: stage.accounts.orgManagement.account,
-      IDC_ACCOUNT_ID: stage.accounts.idc.account,
-      HUB_ACCOUNT_ID: stage.accounts.hub.account,
-    },
     dependsOn: [accountPoolStep],
   });
 
@@ -106,26 +154,19 @@ export function addInnovationSandboxDeployment(
     stack: 'data',
     stageName: stage.stageName,
     input: upstreamSource,
+    configFileSet: input,
     toolingAccount,
     targetAccount: stage.accounts.hub.account,
     targetRegion: stage.accounts.hub.region,
-    envOverrides: {
-      ...stage.envOverrides,
-      ORG_MGT_ACCOUNT_ID: stage.accounts.orgManagement.account,
-      IDC_ACCOUNT_ID: stage.accounts.idc.account,
-      HUB_ACCOUNT_ID: stage.accounts.hub.account,
-    },
     dependsOn: [idcStep],
   });
 
   // 5. Optional Nuke Docker image build/push between Data and Compute.
+  // Per-stage config (NAMESPACE, account IDs, upstream passthrough vars) is NOT
+  // passed here - each deploy step sources it from the synth artifact at
+  // runtime. Only genuinely structural values belong in `staticEnv`.
   let postDataDependency = dataStep;
-  const computeEnvOverrides: Record<string, string> = {
-    ...stage.envOverrides,
-    ORG_MGT_ACCOUNT_ID: stage.accounts.orgManagement.account,
-    IDC_ACCOUNT_ID: stage.accounts.idc.account,
-    HUB_ACCOUNT_ID: stage.accounts.hub.account,
-  };
+  const computeStaticEnv: Record<string, string> = {};
 
   if (buildAndPushNukeImage) {
     const nukeStep = createNukeImageBuildStep({
@@ -138,8 +179,8 @@ export function addInnovationSandboxDeployment(
     nukeStep.addStepDependency(dataStep);
     postDataDependency = nukeStep;
 
-    computeEnvOverrides.PRIVATE_ECR_REPO = `innovation-sandbox-${stage.stageName.toLowerCase()}`;
-    computeEnvOverrides.PRIVATE_ECR_REPO_REGION = stage.accounts.hub.region;
+    computeStaticEnv.PRIVATE_ECR_REPO = `innovation-sandbox-${stage.stageName.toLowerCase()}`;
+    computeStaticEnv.PRIVATE_ECR_REPO_REGION = stage.accounts.hub.region;
 
     wave.addPost(nukeStep);
   }
@@ -149,10 +190,11 @@ export function addInnovationSandboxDeployment(
     stack: 'compute',
     stageName: stage.stageName,
     input: upstreamSource,
+    configFileSet: input,
     toolingAccount,
     targetAccount: stage.accounts.hub.account,
     targetRegion: stage.accounts.hub.region,
-    envOverrides: computeEnvOverrides,
+    staticEnv: computeStaticEnv,
     dependsOn: [postDataDependency],
   });
 
@@ -161,6 +203,7 @@ export function addInnovationSandboxDeployment(
     const testStep = createIntegrationTestStep({
       stageName: stage.stageName,
       input: pipelineSource,
+      configFileSet: input,
       hubAccount: stage.accounts.hub.account,
       hubRegion: stage.accounts.hub.region,
       orgMgtAccount: stage.accounts.orgManagement.account,
@@ -168,8 +211,6 @@ export function addInnovationSandboxDeployment(
       privateEcrRepo: buildAndPushNukeImage
         ? `innovation-sandbox-${stage.stageName.toLowerCase()}`
         : undefined,
-      namespace:
-        stage.envOverrides?.NAMESPACE ?? stage.stageName.toLowerCase(),
     });
     testStep.addStepDependency(computeStep);
     wave.addPost(testStep);

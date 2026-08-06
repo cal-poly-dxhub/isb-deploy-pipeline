@@ -205,6 +205,7 @@ export function loadPipelineConfig(): PipelineConfig {
       '/isb-pipeline/config',
     )!,
     triggerOnConfigChange: booleanEnv('TRIGGER_ON_CONFIG_CHANGE', true),
+    unblockStaleApprovals: booleanEnv('UNBLOCK_STALE_APPROVALS', true),
     notificationEmails: listEnv('NOTIFICATION_EMAILS'),
     stages,
   };

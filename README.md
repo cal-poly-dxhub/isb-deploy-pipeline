@@ -165,8 +165,37 @@ Set `TRIGGER_ON_CONFIG_CHANGE=false` to opt out of the automatic re-trigger, or
 > appear within a minute or so, start one from the CodePipeline console —
 > the config is read at synth time, so any execution picks up the latest value.
 
-> **First deploy only:** `npm run deploy:pipeline` reads from `.env` directly.
-> After that, push config changes via SSM and let self-mutation handle it.
+> **Run `update_ssm.sh` before the first pipeline execution.** The synth step
+> reads *all* of its configuration from the parameter, so the parameter has to
+> exist before a run can succeed. `npm run deploy:pipeline` itself reads `.env`
+> directly and does not need it.
+
+### One config change, one execution
+
+Per-stage configuration is **not** baked into the pipeline definition. During
+synth, each stage's resolved values are written into the cloud assembly as
+`isb-config-<Stage>.env`, and the deploy and integration-test steps mount the
+synth output and source that file at runtime.
+
+This matters because of how self-mutation interacts with
+`RestartExecutionOnUpdate`. When config lives in the pipeline definition, every
+config edit produces a CloudFormation diff, which triggers a self-mutation,
+which restarts the pipeline — so one config change yields *two* executions, and
+the second can arrive while the first is parked on an approval. With config in
+the artifact, editing `NAMESPACE`, `PARENT_OU_ID`, `AWS_REGIONS`,
+`IDENTITY_STORE_ID`, `SSO_INSTANCE_ARN`, the IDC group names,
+`ALLOWED_IP_ADDRESSES`, or `AWS_NUKE_DRY_RUN_MODE` produces no pipeline diff at
+all: one execution, no restart.
+
+Changes that *are* structural still self-mutate and restart, because they alter
+the pipeline itself: account IDs and regions (they appear in the deploy step's
+assume-role ARN and IAM policy), which stages exist, and the
+`*_REQUIRE_MANUAL_APPROVAL` / `*_RUN_INTEGRATION_TESTS` /
+`BUILD_AND_PUSH_NUKE_IMAGE` flags. Those are rare and deliberate.
+
+Because the config file travels inside the artifact, every step of a given
+execution sees the same frozen config — editing the parameter mid-run cannot
+split one execution across two configurations.
 
 Push changes to either this repo (pipeline definition) or the upstream
 Innovation Sandbox repo to trigger a new run.
@@ -206,14 +235,79 @@ There are three ways an execution begins:
 | Self-mutation changing the pipeline | `RestartExecutionOnUpdate` |
 
 The pipeline runs in `SUPERSEDED` execution mode, so a newer execution replaces
-an older one still waiting to enter a stage. That is what keeps the pipeline
-converging on the newest source and config — but it also means an execution
-parked on a manual approval can be superseded, which shows up as an
-**abandoned/failed approval**. When that happens the pipeline goes idle until
-one of the triggers above fires again. The failure notification includes
-`manual-approval-failed` and `pipeline-execution-superseded` so this is visible
-rather than silent; to get moving again, push a commit, re-save the config
-parameter, or hit *Release change* in the console.
+an older one still waiting to enter a stage.
+
+## Manual Approvals
+
+When a stage has `*_REQUIRE_MANUAL_APPROVAL=true`, the stage runs a
+`Diff-<Stage>` step *before* the approval and nothing is deployed until someone
+approves:
+
+```
+Diff-Dev  →  Approve-Dev  →  Deploy AccountPool → IDC → Data → Compute → tests
+```
+
+`Diff-Dev` runs `cdk diff` for all four upstream stacks — re-assuming the deploy
+role per stack, since they span up to three accounts — and publishes the result
+to the artifact bucket at `diffs/<Stage>/latest.txt`. The approval carries a
+link to that object in both `ExternalEntityLink` (the clickable link on the
+console approval dialog) and `CustomData` (so it also appears in the approval
+notification email).
+
+A fixed `latest.txt` per stage is unambiguous rather than racy: CodePipeline
+locks a stage while it holds an execution, so only one execution can ever be
+sitting at a given stage's approval.
+
+Reviewers need `s3:GetObject` on that prefix plus `kms:Decrypt` on the pipeline
+artifact key, because the bucket is encrypted with a customer-managed key.
+
+The diff is informational and never blocks a deploy: if a role cannot be assumed
+or `cdk diff` fails for one stack, the problem is written into the diff output
+and the remaining stacks are still processed. The full diff is also echoed into
+the CodeBuild log as a fallback.
+
+### Why an approval can wedge the pipeline (and what stops it)
+Superseding only happens **between** stages. Per the CodePipeline docs, a stage
+is *locked* while it holds an execution, and "a stage with an approval action is
+locked until the approval action is approved or rejected or has timed out." An
+execution parked on `Approve-Dev` is therefore *inside* the Dev stage, holding
+its lock — newer executions stack up in front of it as **inbound** and can never
+overtake it, no matter how many arrive. The pipeline sits there until a human
+answers, or until the approval times out after seven days. That timeout is fixed
+by CodePipeline and cannot be configured or disabled.
+
+To restore the intent of `SUPERSEDED`, the stack deploys an **approval
+unblocker** Lambda. On every pipeline/stage state change it checks for a pending
+approval and, if a strictly newer execution is still in flight, rejects the
+stale one. Rejection fails the action, which releases the stage lock, and the
+waiting execution moves in. The rejection comment records which execution
+unblocked it.
+
+It is deliberately narrow:
+
+- Only approval actions that exist in the built pipeline are ever touched; their
+  names are discovered at synth time, not guessed.
+- An approval is rejected **only** when a newer execution is genuinely waiting.
+  A lone pending approval keeps waiting for a human indefinitely.
+- Nothing is stopped or abandoned, so an in-flight CloudFormation deploy is
+  never interrupted.
+- `PutApprovalResult` permission is scoped to the specific
+  `<pipeline>/<stage>/<action>` ARNs.
+
+Set `UNBLOCK_STALE_APPROVALS=false` to disable it and accept the stage lock.
+
+With the unblocker in place the seven-day timeout stops mattering in practice: a
+timeout also releases the lock, and by then any waiting execution has already
+taken over. The remaining case — an approval that times out with nothing queued
+behind it — leaves the pipeline idle, and any of the triggers above starts it
+again.
+
+Failure notifications include `manual-approval-failed` and
+`pipeline-execution-superseded` so none of this is silent.
+
+> If you don't actually need a human gate on Dev, setting
+> `DEV_REQUIRE_MANUAL_APPROVAL=false` removes this whole class of problem for the
+> stage that changes most often.
 
 ## Project Layout
 
@@ -225,18 +319,29 @@ parameter, or hit *Release change* in the console.
 │   ├── pipeline-stack.ts            # Main pipeline stack
 │   ├── config/
 │   │   ├── environment-config.ts    # TypeScript types
-│   │   └── pipeline-config.ts       # Default config
+│   │   ├── pipeline-config.ts       # Default config
+│   │   └── stage-config-file.ts     # Per-stage config carried in the artifact
+│   ├── lambda/
+│   │   └── approval-unblocker/      # Frees a stage lock held by a stale approval
+│   │       ├── index.mjs            # Handler (AWS calls)
+│   │       └── select.mjs           # Pure decision logic
 │   ├── stages/
 │   │   └── innovation-sandbox-wave.ts  # Per-stage wave assembly
 │   └── steps/
 │       ├── deploy-step.ts           # Reusable per-stack deploy step
+│       ├── diff-step.ts             # Pre-approval `cdk diff`, published to S3
 │       ├── nuke-image-step.ts       # AWS Nuke ECR build/push
 │       └── integration-test-step.ts # Post-deploy smoke tests
 ├── scripts/
 │   ├── update_ssm.sh               # Push .env config to SSM Parameter Store
-│   └── load_ssm_config.sh          # Synth-time loader for the SSM config
+│   ├── load_ssm_config.sh          # Synth-time loader for the SSM config
+│   └── render_stage_diff.sh        # Multi-account `cdk diff` for approvals
 ├── test/
 │   ├── pipeline-stack.test.ts       # Unit tests (no AWS calls)
+│   ├── stage-config-file.test.ts    # Stage config file rendering
+│   ├── approval-unblocker.test.ts   # Approval unblocker decision logic
+│   ├── support/
+│   │   └── check-approval-select.mjs  # ESM assertions run by the test above
 │   ├── integration/                 # Integration tests (real AWS calls)
 │   │   ├── support/test-env.ts
 │   │   ├── cloudformation.int.test.ts
@@ -420,9 +525,26 @@ and [CodeBuild pricing](https://aws.amazon.com/codebuild/pricing/).
   metrics tell you whether the SSM event arrived. `./scripts/update_ssm.sh`
   skips the write when the value is unchanged, so run it with `FORCE=1` if you
   need a new parameter version.
-- **A manual approval was rejected without anyone touching it** — Expected under
-  `SUPERSEDED` execution mode: a newer execution superseded the one waiting on
-  the approval. The pipeline stays idle afterwards, so start a fresh run (push a
-  commit, re-save the config parameter with `FORCE=1`, or *Release change*).
+- **A manual approval was rejected without anyone touching it** — Check the
+  rejection comment. If it starts with "Automatically rejected", the approval
+  unblocker freed the stage lock because a newer execution was queued behind it;
+  approve that newer execution instead. Otherwise the approval hit the
+  seven-day CodePipeline timeout, which cannot be extended — start a fresh run
+  (push a commit, re-save the config parameter with `FORCE=1`, or *Release
+  change*).
+- **New executions sit at "Inbound" and never start** — An older execution is
+  holding the stage lock. If it is parked on an approval, answer it or let the
+  unblocker handle it; check the `<pipeline>-unblock-approval` rule's
+  `Invocations` metric and the Lambda's logs to see what it decided.
+- **`isb-config-<Stage>.env is missing from the synth artifact`** — The synth
+  step ran before the config parameter existed. Run `./scripts/update_ssm.sh`
+  and start a new execution.
+- **The approval's diff link 404s or shows "Access Denied"** — The `Diff-<Stage>`
+  step failed before uploading, or you lack `kms:Decrypt` on the pipeline
+  artifact key. The full diff is also printed in the `Diff-<Stage>` CodeBuild
+  log, which is the fallback.
+- **The diff says it could not assume the deploy role** — The same
+  `InnovationSandboxPipelineDeployRole` used for deploys is used for the diff.
+  See setup step 3.
 - **Self-mutation loop / pipeline keeps replacing itself** — A change in the
   `cdk.context.json` snapshot. Commit the file to source control to stabilise.

@@ -11,6 +11,7 @@ import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Topic } from 'aws-cdk-lib/aws-sns';
@@ -22,9 +23,11 @@ import {
   Wave,
 } from 'aws-cdk-lib/pipelines';
 import { Construct } from 'constructs';
+import * as path from 'path';
 
 import { PipelineConfig } from './config/environment-config';
 import { addInnovationSandboxDeployment } from './stages/innovation-sandbox-wave';
+import { stageDiffUrl } from './steps/diff-step';
 
 /** Centralized version constants to prevent drift across pipeline steps. */
 const NODEJS_VERSION = '22';
@@ -86,9 +89,15 @@ export class PipelineStack extends Stack {
     Tags.of(this).add('Project', 'InnovationSandbox');
     Tags.of(this).add('Component', 'CICD');
     Tags.of(this).add('ManagedBy', 'CDK');
-    // Config hash forces self-mutation when SSM config changes
-    const configHash = this.node.tryGetContext('configHash') ?? 'local';
-    Tags.of(this).add('ConfigHash', configHash);
+    // NOTE: there is deliberately no ConfigHash tag here. It used to be added
+    // to force a self-mutation whenever the SSM config changed, but because
+    // stack tags land on every taggable resource - including the pipeline
+    // itself - it guaranteed a CloudFormation diff on every config edit. That
+    // diff triggered self-mutation, which triggered RestartExecutionOnUpdate,
+    // which produced a second execution for a single config change. Config is
+    // now carried inside the synth artifact and read at deploy time instead
+    // (see lib/config/stage-config-file.ts), so a config-only change produces
+    // no pipeline diff at all.
     // ------------------------------------------------------------------
     // 1. Encryption + artifact bucket
     // ------------------------------------------------------------------
@@ -215,9 +224,10 @@ export class PipelineStack extends Stack {
         'echo "==> Synth pipeline stack"',
         'cd "$CODEBUILD_SRC_DIR"',
         'npm ci --no-audit --no-fund',
-        // configHash lands on a stack tag, which guarantees a CloudFormation
-        // diff (and therefore a self-mutation) whenever only the config moved.
-        'npx cdk synth --context configHash="$ISB_CONFIG_HASH"',
+        'npx cdk synth',
+        // The per-stage config files written by bin/pipeline-app.ts must be in
+        // the artifact for the deploy steps to source at runtime.
+        'ls -1 cdk.out/isb-config-*.env',
         'echo "==> Done"',
       ],
       env: synthEnv,
@@ -324,6 +334,10 @@ export class PipelineStack extends Stack {
         pipelineSource,
         buildAndPushNukeImage: config.buildAndPushNukeImage ?? false,
         toolingAccount: config.toolingEnv.account,
+        toolingRegion: config.toolingEnv.region,
+        diffBucketName: artifactBucket.bucketName,
+        diffBucketArn: artifactBucket.bucketArn,
+        diffKeyArn: artifactKey.keyArn,
         scope: this,
       });
     }
@@ -389,8 +403,107 @@ export class PipelineStack extends Stack {
       });
     }
 
+    const approvalActions = findApprovalActions(this.pipeline.pipeline);
+
+    // Give each approval a clickable link to the diff rendered by the Diff step
+    // that runs immediately before it. `ManualApprovalStep` only surfaces
+    // `comment` (CustomData), so ExternalEntityLink - the field the console
+    // renders as a link on the approval dialog - is set via an override.
+    for (const approval of approvalActions) {
+      cfnPipeline.addPropertyOverride(
+        `Stages.${approval.stageIndex}.Actions.${approval.actionIndex}.Configuration.ExternalEntityLink`,
+        stageDiffUrl(
+          approval.stageName,
+          artifactBucket.bucketName,
+          config.toolingEnv.region,
+        ),
+      );
+    }
+
     // ------------------------------------------------------------------
-    // 8. Notifications
+    // 8. Unblock stale manual approvals
+    // ------------------------------------------------------------------
+    // SUPERSEDED mode only supersedes executions *between* stages. An
+    // execution parked on a manual approval sits *inside* a stage and holds its
+    // lock, so newer executions stack up as inbound and never overtake it - the
+    // stage stays locked until someone answers the approval or it times out
+    // after seven days (a timeout AWS does not let you configure). This restores
+    // the intended "newest wins" behaviour by rejecting the stale approval,
+    // which releases the lock so the waiting execution can enter.
+    if ((config.unblockStaleApprovals ?? true) && approvalActions.length > 0) {
+      const unblocker = new lambda.Function(this, 'ApprovalUnblocker', {
+        // Constructed by name rather than via lambda.Runtime.NODEJS_22_X
+        // because the enum in aws-cdk-lib 2.167.1 stops at NODEJS_20_X. Kept on
+        // 22 to match NODEJS_VERSION used by every CodeBuild project above.
+        runtime: new lambda.Runtime(
+          `nodejs${NODEJS_VERSION}.x`,
+          lambda.RuntimeFamily.NODEJS,
+        ),
+        handler: 'index.handler',
+        code: lambda.Code.fromAsset(
+          path.join(__dirname, 'lambda', 'approval-unblocker'),
+        ),
+        timeout: Duration.seconds(30),
+        description:
+          `Rejects a pending approval in ${config.pipelineName} when a newer ` +
+          'execution is blocked behind it.',
+        logRetention: logs.RetentionDays.ONE_MONTH,
+        environment: {
+          PIPELINE_NAME: config.pipelineName,
+          APPROVAL_ACTIONS: JSON.stringify(
+            approvalActions.map((a) => ({
+              stageName: a.stageName,
+              actionName: a.actionName,
+            })),
+          ),
+        },
+      });
+
+      const pipelineArn = this.pipeline.pipeline.pipelineArn;
+      unblocker.addToRolePolicy(
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: [
+            'codepipeline:GetPipelineState',
+            'codepipeline:ListPipelineExecutions',
+          ],
+          resources: [pipelineArn],
+        }),
+      );
+      unblocker.addToRolePolicy(
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: ['codepipeline:PutApprovalResult'],
+          // PutApprovalResult is authorised per approval action, whose ARN is
+          // <pipeline-arn>/<stage>/<action>.
+          resources: approvalActions.map(
+            (a) => `${pipelineArn}/${a.stageName}/${a.actionName}`,
+          ),
+        }),
+      );
+
+      new events.Rule(this, 'ApprovalUnblockTrigger', {
+        ruleName: truncate(`${config.pipelineName}-unblock-approval`, 64),
+        description:
+          'Re-evaluates pending approvals whenever an execution starts or ' +
+          'clears a stage, so a stale approval cannot wedge the pipeline.',
+        eventPattern: {
+          source: ['aws.codepipeline'],
+          detailType: [
+            'CodePipeline Pipeline Execution State Change',
+            'CodePipeline Stage Execution State Change',
+          ],
+          detail: {
+            pipeline: [config.pipelineName],
+            state: ['STARTED', 'SUCCEEDED'],
+          },
+        },
+        targets: [new targets.LambdaFunction(unblocker, { retryAttempts: 2 })],
+      });
+    }
+
+    // ------------------------------------------------------------------
+    // 9. Notifications
     // ------------------------------------------------------------------
     if (
       config.notificationTopicArn === undefined &&
@@ -468,6 +581,42 @@ function parameterNameMatchers(parameterName: string): string[] {
   return withoutSlash === parameterName
     ? [parameterName]
     : [parameterName, withoutSlash];
+}
+
+/**
+ * Locates every manual approval action in the built pipeline, with the stage
+ * and action indices needed for CloudFormation property overrides. Read from
+ * the pipeline itself rather than reconstructed from config so the names cannot
+ * drift from what CodePipeline actually calls them.
+ */
+function findApprovalActions(pipeline: codepipeline.Pipeline): Array<{
+  stageName: string;
+  actionName: string;
+  stageIndex: number;
+  actionIndex: number;
+}> {
+  const found: Array<{
+    stageName: string;
+    actionName: string;
+    stageIndex: number;
+    actionIndex: number;
+  }> = [];
+  pipeline.stages.forEach((stage, stageIndex) => {
+    stage.actions.forEach((action, actionIndex) => {
+      if (
+        action.actionProperties.category ===
+        codepipeline.ActionCategory.APPROVAL
+      ) {
+        found.push({
+          stageName: stage.stageName,
+          actionName: action.actionProperties.actionName,
+          stageIndex,
+          actionIndex,
+        });
+      }
+    });
+  });
+  return found;
 }
 
 /** Trim a string to at most maxLength characters. */
