@@ -108,4 +108,125 @@ describe('PipelineStack', () => {
       .map((a) => a.ActionTypeId.Category);
     expect(allActionTypes).toContain('Approval');
   });
+
+  it('is a V2 pipeline in SUPERSEDED execution mode', () => {
+    template.hasResourceProperties('AWS::CodePipeline::Pipeline', {
+      PipelineType: 'V2',
+      ExecutionMode: 'SUPERSEDED',
+    });
+  });
+
+  it('names both source actions explicitly', () => {
+    const pipelines = template.findResources('AWS::CodePipeline::Pipeline');
+    const props = Object.values(pipelines)[0].Properties;
+    const sourceStage = (props.Stages as Array<{ Name: string; Actions: Array<{ Name: string }> }>)
+      .find((s) => s.Name === 'Source');
+    expect(sourceStage?.Actions.map((a) => a.Name).sort()).toEqual([
+      'PipelineRepoSource',
+      'UpstreamRepoSource',
+    ]);
+  });
+
+  it('registers a push trigger for BOTH source actions', () => {
+    // Regression: only the upstream source used to have a trigger, and its
+    // action name was resolved by substring match, so pushes to the pipeline
+    // repo could stop starting executions.
+    template.hasResourceProperties('AWS::CodePipeline::Pipeline', {
+      Triggers: Match.arrayWith([
+        {
+          ProviderType: 'CodeStarSourceConnection',
+          GitConfiguration: {
+            SourceActionName: 'PipelineRepoSource',
+            Push: [{ Branches: { Includes: ['main'] } }],
+          },
+        },
+        {
+          ProviderType: 'CodeStarSourceConnection',
+          GitConfiguration: {
+            SourceActionName: 'UpstreamRepoSource',
+            Push: [{ Branches: { Includes: ['main'] } }],
+          },
+        },
+      ]),
+    });
+  });
+
+  it('starts an execution when the SSM config parameter changes', () => {
+    template.hasResourceProperties('AWS::Events::Rule', {
+      EventPattern: {
+        source: ['aws.ssm'],
+        'detail-type': ['Parameter Store Change'],
+        detail: {
+          name: ['/isb-pipeline/config', 'isb-pipeline/config'],
+          operation: ['Create', 'Update', 'LabelParameterVersion'],
+        },
+      },
+      State: 'ENABLED',
+      Targets: Match.arrayWith([
+        Match.objectLike({
+          Arn: Match.objectLike({
+            'Fn::Join': Match.anyValue(),
+          }),
+          RetryPolicy: { MaximumRetryAttempts: 2 },
+        }),
+      ]),
+    });
+  });
+
+  it('loads config from SSM before synthesising the upstream app', () => {
+    const projects = template.findResources('AWS::CodeBuild::Project');
+    const synth = Object.values(projects).find((p) =>
+      JSON.stringify(p.Properties.Source?.BuildSpec ?? '').includes(
+        'load_ssm_config.sh',
+      ),
+    );
+    expect(synth).toBeDefined();
+
+    const buildSpec = JSON.stringify(synth!.Properties.Source.BuildSpec);
+    expect(buildSpec.indexOf('load_ssm_config.sh')).toBeLessThan(
+      buildSpec.indexOf('Synth upstream Innovation Sandbox CDK app'),
+    );
+    expect(buildSpec).toContain('--context configHash=');
+    expect(buildSpec).toContain('$ISB_CONFIG_HASH');
+  });
+});
+
+describe('PipelineStack config-change trigger opt-out', () => {
+  it('omits the EventBridge rule when triggerOnConfigChange is false', () => {
+    const app = new App({
+      context: {
+        '@aws-cdk/aws-codepipeline:defaultPipelineTypeToV2': true,
+      },
+    });
+    const stack = new PipelineStack(app, 'NoTriggerPipelineStack', {
+      config: { ...testConfig, triggerOnConfigChange: false },
+      env: testConfig.toolingEnv,
+    });
+    const rules = Template.fromStack(stack).findResources(
+      'AWS::Events::Rule',
+      {
+        Properties: {
+          EventPattern: Match.objectLike({ source: ['aws.ssm'] }),
+        },
+      },
+    );
+    expect(Object.keys(rules)).toHaveLength(0);
+  });
+
+  it('honours a custom config parameter name', () => {
+    const app = new App({
+      context: {
+        '@aws-cdk/aws-codepipeline:defaultPipelineTypeToV2': true,
+      },
+    });
+    const stack = new PipelineStack(app, 'CustomParamPipelineStack', {
+      config: { ...testConfig, configParameterName: '/custom/isb' },
+      env: testConfig.toolingEnv,
+    });
+    Template.fromStack(stack).hasResourceProperties('AWS::Events::Rule', {
+      EventPattern: Match.objectLike({
+        detail: Match.objectLike({ name: ['/custom/isb', 'custom/isb'] }),
+      }),
+    });
+  });
 });

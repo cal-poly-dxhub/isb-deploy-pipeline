@@ -200,6 +200,11 @@ export function loadPipelineConfig(): PipelineConfig {
       codestarConnectionArn: requireEnv('PIPELINE_CODESTAR_CONNECTION_ARN'),
     },
     buildAndPushNukeImage: booleanEnv('BUILD_AND_PUSH_NUKE_IMAGE', false),
+    configParameterName: optionalEnv(
+      'CONFIG_PARAMETER_NAME',
+      '/isb-pipeline/config',
+    )!,
+    triggerOnConfigChange: booleanEnv('TRIGGER_ON_CONFIG_CHANGE', true),
     notificationEmails: listEnv('NOTIFICATION_EMAILS'),
     stages,
   };

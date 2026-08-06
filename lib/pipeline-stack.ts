@@ -7,6 +7,8 @@ import {
 } from 'aws-cdk-lib';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import * as codepipeline from 'aws-cdk-lib/aws-codepipeline';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as logs from 'aws-cdk-lib/aws-logs';
@@ -27,6 +29,20 @@ import { addInnovationSandboxDeployment } from './stages/innovation-sandbox-wave
 /** Centralized version constants to prevent drift across pipeline steps. */
 const NODEJS_VERSION = '22';
 const CDK_CLI_VERSION = '2.167.1';
+
+/** Default SSM parameter holding the pipeline configuration. */
+const DEFAULT_CONFIG_PARAMETER_NAME = '/isb-pipeline/config';
+
+/**
+ * Explicit CodePipeline action names for the two source actions.
+ *
+ * These are pinned (rather than left to CDK's default of "<owner>_<repo>")
+ * because the V2 `Triggers` block has to reference source actions by name. A
+ * name derived from the repo would change whenever someone points the pipeline
+ * at a fork, silently breaking push triggers.
+ */
+const PIPELINE_SOURCE_ACTION_NAME = 'PipelineRepoSource';
+const UPSTREAM_SOURCE_ACTION_NAME = 'UpstreamRepoSource';
 
 export interface PipelineStackProps extends StackProps {
   readonly config: PipelineConfig;
@@ -132,6 +148,7 @@ export class PipelineStack extends Stack {
       {
         connectionArn: config.pipelineSource.codestarConnectionArn!,
         triggerOnPush: true,
+        actionName: PIPELINE_SOURCE_ACTION_NAME,
       },
     );
 
@@ -142,6 +159,7 @@ export class PipelineStack extends Stack {
       {
         connectionArn: config.source.codestarConnectionArn!,
         triggerOnPush: true,
+        actionName: UPSTREAM_SOURCE_ACTION_NAME,
       },
     );
 
@@ -153,9 +171,13 @@ export class PipelineStack extends Stack {
     // Innovation Sandbox repo is mounted as an additional input at
     // `../upstream`.
     const firstStage = config.stages[0];
+    const configParameterName =
+      config.configParameterName ?? DEFAULT_CONFIG_PARAMETER_NAME;
     const synthEnv: Record<string, string> = {
       NODE_OPTIONS: '--max-old-space-size=8192',
-      // Upstream synth needs these unprefixed
+      // Upstream synth needs these unprefixed. These are only fallbacks for
+      // the very first run (before the SSM parameter exists) - normally
+      // load_ssm_config.sh overwrites them from the live config.
       ORG_MGT_ACCOUNT_ID: firstStage.accounts.orgManagement.account,
       IDC_ACCOUNT_ID: firstStage.accounts.idc.account,
       HUB_ACCOUNT_ID: firstStage.accounts.hub.account,
@@ -173,6 +195,13 @@ export class PipelineStack extends Stack {
       ],
       commands: [
         'set -eu',
+        // Load config from SSM FIRST. Everything below - including the
+        // upstream synth - then runs against the current configuration, so an
+        // SSM change is picked up by this run rather than the next one.
+        'cd "$CODEBUILD_SRC_DIR"',
+        `bash ./scripts/load_ssm_config.sh "${configParameterName}" "${config.toolingEnv.region}" /tmp/isb.env`,
+        'set -a && . /tmp/isb.env && set +a',
+        'echo "Upstream synth targets: org=$ORG_MGT_ACCOUNT_ID idc=$IDC_ACCOUNT_ID hub=$HUB_ACCOUNT_ID"',
         // Build & test upstream
         'echo "==> Installing upstream dependencies"',
         'cd ../upstream && npm ci --no-audit --no-fund',
@@ -184,14 +213,11 @@ export class PipelineStack extends Stack {
         'cd ../upstream/source/infrastructure && npx cdk synth --all --output ../../cdk.out',
         // Synth this pipeline
         'echo "==> Synth pipeline stack"',
-        'cd $CODEBUILD_SRC_DIR',
-        // Load config from SSM Parameter Store into environment
-        'echo "==> Loading config from SSM"',
-        `export ISB_CONFIG=$(aws ssm get-parameter --name /isb-pipeline/config --region ${config.toolingEnv.region} --query Parameter.Value --output text)`,
-        "echo \"$ISB_CONFIG\" | python3 -c \"import sys,json; [print(f\\\"{k}='{v}'\\\") for k,v in json.loads(sys.stdin.read()).items()]\" > /tmp/isb.env",
-        'set -a && source /tmp/isb.env && set +a',
+        'cd "$CODEBUILD_SRC_DIR"',
         'npm ci --no-audit --no-fund',
-        'npx cdk synth --context configHash=$(echo $ISB_CONFIG | md5sum | cut -d" " -f1)',
+        // configHash lands on a stack tag, which guarantees a CloudFormation
+        // diff (and therefore a self-mutation) whenever only the config moved.
+        'npx cdk synth --context configHash="$ISB_CONFIG_HASH"',
         'echo "==> Done"',
       ],
       env: synthEnv,
@@ -303,7 +329,68 @@ export class PipelineStack extends Stack {
     }
 
     // ------------------------------------------------------------------
-    // 6. Notifications
+    // 6. Pipeline-level overrides: execution mode + triggers
+    // ------------------------------------------------------------------
+    // buildPipeline() is required before the underlying CfnPipeline is
+    // reachable. Everything past this point mutates the built pipeline, so no
+    // further waves or stages may be added below.
+    this.pipeline.buildPipeline();
+
+    const cfnPipeline = this.pipeline.pipeline.node
+      .defaultChild as codepipeline.CfnPipeline;
+    cfnPipeline.addPropertyOverride('PipelineType', 'V2');
+    // SUPERSEDED: a newer execution replaces an older one still waiting to
+    // enter a stage, so the pipeline always converges on the newest source and
+    // config instead of replaying stale revisions.
+    cfnPipeline.addPropertyOverride('ExecutionMode', 'SUPERSEDED');
+
+    // A V2 pipeline needs one trigger entry per source action it should react
+    // to. Previously only the upstream source had one, and its action name was
+    // discovered by substring-matching "aws-solutions" - which resolves to
+    // `undefined` for any fork and leaves the pipeline with a broken trigger.
+    // Both actions are now named explicitly and referenced by constant.
+    assertSourceActionsExist(this.pipeline.pipeline, [
+      PIPELINE_SOURCE_ACTION_NAME,
+      UPSTREAM_SOURCE_ACTION_NAME,
+    ]);
+    cfnPipeline.addPropertyOverride('Triggers', [
+      gitPushTrigger(PIPELINE_SOURCE_ACTION_NAME, config.pipelineSource.branch),
+      gitPushTrigger(UPSTREAM_SOURCE_ACTION_NAME, config.source.branch),
+    ]);
+
+    // ------------------------------------------------------------------
+    // 7. Start a run whenever the config parameter changes
+    // ------------------------------------------------------------------
+    // Config lives in SSM and is only read during Synth, so a config change on
+    // its own used to leave the pipeline idle: nothing re-synthesised, nothing
+    // re-baked the per-stage parameters, and the deployed stacks silently kept
+    // the previous values. Reacting to the Parameter Store event (rather than
+    // starting the run from update_ssm.sh) means edits made directly in the
+    // console or by any other tooling are picked up too.
+    if (config.triggerOnConfigChange ?? true) {
+      new events.Rule(this, 'ConfigChangeTrigger', {
+        ruleName: truncate(`${config.pipelineName}-config-change`, 64),
+        description:
+          `Starts ${config.pipelineName} when ${configParameterName} changes ` +
+          'in SSM Parameter Store.',
+        eventPattern: {
+          source: ['aws.ssm'],
+          detailType: ['Parameter Store Change'],
+          detail: {
+            name: parameterNameMatchers(configParameterName),
+            operation: ['Create', 'Update', 'LabelParameterVersion'],
+          },
+        },
+        targets: [
+          new targets.CodePipeline(this.pipeline.pipeline, {
+            retryAttempts: 2,
+          }),
+        ],
+      });
+    }
+
+    // ------------------------------------------------------------------
+    // 8. Notifications
     // ------------------------------------------------------------------
     if (
       config.notificationTopicArn === undefined &&
@@ -316,42 +403,71 @@ export class PipelineStack extends Stack {
       for (const email of config.notificationEmails) {
         topic.addSubscription(new EmailSubscription(email));
       }
-      // CodeStar Notifications integration is added at synth time after the
-      // pipeline buildup has finished. We pass an explicit short name because
-      // CodeStar Notifications enforces a 64-character limit on rule names
-      // and the CDK auto-generated name (which prefixes the construct path)
-      // can exceed that.
-      this.pipeline.buildPipeline();
-
-      // Force SUPERSEDED execution mode so new runs cancel old ones
-      const cfnPipeline = this.pipeline.pipeline.node.defaultChild as codepipeline.CfnPipeline;
-      cfnPipeline.addPropertyOverride('ExecutionMode', 'SUPERSEDED');
-      cfnPipeline.addPropertyOverride('PipelineType', 'V2');
-
-      // Trigger pipeline on pushes to the upstream repo (primary source
-      // triggers automatically, additional sources need explicit triggers)
-      cfnPipeline.addPropertyOverride('Triggers', [
-        {
-          ProviderType: 'CodeStarSourceConnection',
-          GitConfiguration: {
-            SourceActionName: this.pipeline.pipeline.stages[0].actions
-              .find((a) => a.actionProperties.actionName.includes('aws-solutions'))
-              ?.actionProperties.actionName,
-            Push: [{ Branches: { Includes: [config.source.branch] } }],
-          },
-        },
-      ]);
-
+      // We pass an explicit short name because CodeStar Notifications enforces
+      // a 64-character limit on rule names and the CDK auto-generated name
+      // (which prefixes the construct path) can exceed that.
       this.pipeline.pipeline.notifyOn('PipelineFailures', topic, {
         notificationRuleName: truncate(`${config.pipelineName}-failures`, 64),
         events: [
           codepipeline.PipelineNotificationEvents.PIPELINE_EXECUTION_FAILED,
           codepipeline.PipelineNotificationEvents.PIPELINE_EXECUTION_CANCELED,
+          codepipeline.PipelineNotificationEvents.PIPELINE_EXECUTION_SUPERSEDED,
           codepipeline.PipelineNotificationEvents.MANUAL_APPROVAL_NEEDED,
+          // A pending approval is abandoned when a newer execution supersedes
+          // it or the 7-day timeout expires. That leaves the pipeline idle
+          // until something starts a new run, so it needs to be visible.
+          codepipeline.PipelineNotificationEvents.MANUAL_APPROVAL_FAILED,
         ],
       });
     }
   }
+}
+
+/**
+ * Builds a V2 pipeline git push trigger for a single source action.
+ */
+function gitPushTrigger(sourceActionName: string, branch: string) {
+  return {
+    ProviderType: 'CodeStarSourceConnection',
+    GitConfiguration: {
+      SourceActionName: sourceActionName,
+      Push: [{ Branches: { Includes: [branch] } }],
+    },
+  };
+}
+
+/**
+ * Fails synth if a trigger references a source action that does not exist.
+ * A `Triggers` entry pointing at a missing action is accepted by
+ * CloudFormation but never fires, which is exactly the silent-no-trigger
+ * failure mode this guards against.
+ */
+function assertSourceActionsExist(
+  pipeline: codepipeline.Pipeline,
+  expected: string[],
+): void {
+  const actual = pipeline.stages[0].actions.map(
+    (a) => a.actionProperties.actionName,
+  );
+  const missing = expected.filter((name) => !actual.includes(name));
+  if (missing.length > 0) {
+    throw new Error(
+      `Expected source action(s) ${missing.join(', ')} in the Source stage, ` +
+        `but found: ${actual.join(', ')}. Pipeline triggers would not fire.`,
+    );
+  }
+}
+
+/**
+ * SSM `Parameter Store Change` events report `detail.name`; whether the
+ * leading slash of a hierarchical name is included has varied, so match both
+ * forms rather than risk a rule that never fires.
+ */
+function parameterNameMatchers(parameterName: string): string[] {
+  const withoutSlash = parameterName.replace(/^\//, '');
+  return withoutSlash === parameterName
+    ? [parameterName]
+    : [parameterName, withoutSlash];
 }
 
 /** Trim a string to at most maxLength characters. */

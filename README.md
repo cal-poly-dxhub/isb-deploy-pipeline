@@ -149,9 +149,21 @@ and running:
 ./scripts/update_ssm.sh
 ```
 
-The script reads `TOOLING_REGION` from `.env` to target the correct region.
-On the next pipeline run, the synth step loads from SSM and self-mutation
-applies any changes (including source branch updates).
+The script reads `TOOLING_REGION` from `.env` to target the correct region, and
+skips the write when nothing changed (`FORCE=1` overrides).
+
+Writing the parameter is all you need to do. The pipeline owns an EventBridge
+rule on the SSM `Parameter Store Change` event, so **any** edit to the
+parameter — via this script, the AWS console, or other tooling — starts a new
+execution. The synth step loads the parameter *before* it synthesises anything,
+so the new values are baked into that same run rather than the one after it.
+
+Set `TRIGGER_ON_CONFIG_CHANGE=false` to opt out of the automatic re-trigger, or
+`CONFIG_PARAMETER_NAME` to use a different parameter.
+
+> Parameter Store events are delivered on a best-effort basis. If a run does not
+> appear within a minute or so, start one from the CodePipeline console —
+> the config is read at synth time, so any execution picks up the latest value.
 
 > **First deploy only:** `npm run deploy:pipeline` reads from `.env` directly.
 > After that, push config changes via SSM and let self-mutation handle it.
@@ -176,6 +188,33 @@ access to both repositories. Configure them via:
 | `GITHUB_OWNER` / `GITHUB_REPO` / `GITHUB_BRANCH` | Upstream Innovation Sandbox repo |
 | `PIPELINE_GITHUB_OWNER` / `PIPELINE_GITHUB_REPO` / `PIPELINE_GITHUB_BRANCH` | This pipeline repo |
 
+Because this is a CodePipeline **V2** pipeline, each source needs its own entry
+in the pipeline's `Triggers` block. Those entries reference source actions *by
+name*, so both actions are given fixed names — `PipelineRepoSource` and
+`UpstreamRepoSource` — rather than the CDK default of `<owner>_<repo>`. Synth
+fails fast if a trigger ever references an action that does not exist, since
+CloudFormation accepts such a trigger happily and it simply never fires.
+
+## How Runs Get Started
+
+There are three ways an execution begins:
+
+| Trigger | Source |
+|---|---|
+| Push to the tracked branch of either repo | CodeStar Connection webhook + V2 `Triggers` |
+| Create/update of the config SSM parameter | EventBridge rule → `StartPipelineExecution` |
+| Self-mutation changing the pipeline | `RestartExecutionOnUpdate` |
+
+The pipeline runs in `SUPERSEDED` execution mode, so a newer execution replaces
+an older one still waiting to enter a stage. That is what keeps the pipeline
+converging on the newest source and config — but it also means an execution
+parked on a manual approval can be superseded, which shows up as an
+**abandoned/failed approval**. When that happens the pipeline goes idle until
+one of the triggers above fires again. The failure notification includes
+`manual-approval-failed` and `pipeline-execution-superseded` so this is visible
+rather than silent; to get moving again, push a commit, re-save the config
+parameter, or hit *Release change* in the console.
+
 ## Project Layout
 
 ```
@@ -194,7 +233,8 @@ access to both repositories. Configure them via:
 │       ├── nuke-image-step.ts       # AWS Nuke ECR build/push
 │       └── integration-test-step.ts # Post-deploy smoke tests
 ├── scripts/
-│   └── update_ssm.sh               # Push .env config to SSM Parameter Store
+│   ├── update_ssm.sh               # Push .env config to SSM Parameter Store
+│   └── load_ssm_config.sh          # Synth-time loader for the SSM config
 ├── test/
 │   ├── pipeline-stack.test.ts       # Unit tests (no AWS calls)
 │   ├── integration/                 # Integration tests (real AWS calls)
@@ -375,5 +415,14 @@ and [CodeBuild pricing](https://aws.amazon.com/codebuild/pricing/).
   The target account is not bootstrapped or the trust relationship is missing.
   Re-run `cdk bootstrap aws://<account>/<region> --trust <tooling-account>`.
 - **`Cannot find module 'aws-cdk-lib'`** — Run `npm install`.
+- **Config change did nothing** — Check the `<pipeline>-config-change`
+  EventBridge rule in the tooling account: its `Invocations`/`FailedInvocations`
+  metrics tell you whether the SSM event arrived. `./scripts/update_ssm.sh`
+  skips the write when the value is unchanged, so run it with `FORCE=1` if you
+  need a new parameter version.
+- **A manual approval was rejected without anyone touching it** — Expected under
+  `SUPERSEDED` execution mode: a newer execution superseded the one waiting on
+  the approval. The pipeline stays idle afterwards, so start a fresh run (push a
+  commit, re-save the config parameter with `FORCE=1`, or *Release change*).
 - **Self-mutation loop / pipeline keeps replacing itself** — A change in the
   `cdk.context.json` snapshot. Commit the file to source control to stabilise.

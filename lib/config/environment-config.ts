@@ -139,4 +139,24 @@ export interface PipelineConfig {
    * deploy. This sets the PRIVATE_ECR_REPO* env vars used by upstream.
    */
   readonly buildAndPushNukeImage?: boolean;
+
+  /**
+   * Name of the SSM parameter that holds the pipeline configuration (the JSON
+   * blob written by `scripts/update_ssm.sh`). The synth step reads it, and the
+   * pipeline starts a new execution whenever it changes.
+   *
+   * @default "/isb-pipeline/config"
+   */
+  readonly configParameterName?: string;
+
+  /**
+   * If true, an EventBridge rule starts a pipeline execution whenever
+   * `configParameterName` is created or updated in SSM Parameter Store.
+   *
+   * Without this, a config change sits unused until some unrelated git push
+   * happens to trigger a run, because the config is only read during synth.
+   *
+   * @default true
+   */
+  readonly triggerOnConfigChange?: boolean;
 }
