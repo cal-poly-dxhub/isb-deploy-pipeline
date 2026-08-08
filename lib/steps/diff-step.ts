@@ -112,10 +112,8 @@ export function createDiffStep(props: DiffStepProps): CodeBuildStep {
       // Surface it in the build log too, so the diff survives even if the
       // upload fails.
       'cat /tmp/isb-diff.txt',
-      // charset=utf-8 is required, not cosmetic: cdk diff draws its tree with
-      // box-drawing characters (U+2502 and friends), and a bare `text/plain`
-      // makes browsers fall back to a locale default such as windows-1252,
-      // which renders them as mojibake ("â”‚" instead of "│").
+      // charset is load-bearing: without it cdk diff's box-drawing tree
+      // renders as mojibake in the browser (see the unit test).
       `aws s3 cp /tmp/isb-diff.txt "s3://${props.diffBucketName}/${diffKey}" --content-type "text/plain; charset=utf-8" --sse aws:kms --sse-kms-key-id "${props.diffKeyArn}" --region ${props.region}`,
       `echo "==> Diff published to ${stageDiffUrl(props.stageName, props.diffBucketName, props.region)}"`,
     ],

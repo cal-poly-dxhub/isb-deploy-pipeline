@@ -139,7 +139,7 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
       // Per-stage config is read from the synth artifact at runtime, not baked
       // into this project's environment. A config-only change therefore does
       // not alter the pipeline definition.
-      `if [ ! -f "${configPath}" ]; then echo "ERROR: ${configPath} is missing from the synth artifact. Run ./scripts/update_ssm.sh so the config parameter exists, then re-run the pipeline." >&2; exit 1; fi`,
+      `if [ ! -f "${configPath}" ]; then echo "ERROR: ${configPath} is missing from the synth artifact. Run 'npm run config:push' so the config parameter exists, then re-run the pipeline." >&2; exit 1; fi`,
       `echo "==> Loading stage config from ${configPath}"`,
       `set -a && . "${configPath}" && set +a`,
       'echo "==> NAMESPACE=${NAMESPACE:-<unset>} ORG_MGT_ACCOUNT_ID=${ORG_MGT_ACCOUNT_ID:-<unset>} IDC_ACCOUNT_ID=${IDC_ACCOUNT_ID:-<unset>} HUB_ACCOUNT_ID=${HUB_ACCOUNT_ID:-<unset>}"',

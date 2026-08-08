@@ -379,7 +379,7 @@ export class PipelineStack extends Stack {
     // its own used to leave the pipeline idle: nothing re-synthesised, nothing
     // re-baked the per-stage parameters, and the deployed stacks silently kept
     // the previous values. Reacting to the Parameter Store event (rather than
-    // starting the run from update_ssm.sh) means edits made directly in the
+    // starting the run from the publish script) means edits made directly in the
     // console or by any other tooling are picked up too.
     if (config.triggerOnConfigChange ?? true) {
       new events.Rule(this, 'ConfigChangeTrigger', {
@@ -447,7 +447,12 @@ export class PipelineStack extends Stack {
         description:
           `Rejects a pending approval in ${config.pipelineName} when a newer ` +
           'execution is blocked behind it.',
-        logRetention: logs.RetentionDays.ONE_MONTH,
+        // Explicit log group rather than the legacy `logRetention` prop, which
+        // provisions a custom resource to set retention after the fact.
+        logGroup: new logs.LogGroup(this, 'ApprovalUnblockerLogs', {
+          retention: logs.RetentionDays.ONE_MONTH,
+          removalPolicy: RemovalPolicy.DESTROY,
+        }),
         environment: {
           PIPELINE_NAME: config.pipelineName,
           APPROVAL_ACTIONS: JSON.stringify(

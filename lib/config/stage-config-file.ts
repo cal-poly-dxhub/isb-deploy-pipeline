@@ -56,7 +56,7 @@ export function renderStageConfigFile(stage: DeploymentStageConfig): string {
     '# producing a pipeline diff (and therefore a self-mutation plus a second,',
     '# restarted execution).',
     '#',
-    '# Do not edit by hand - edit .env and run scripts/update_ssm.sh.',
+    '# Do not edit by hand - edit .env and run `npm run config:push`.',
   ];
   const body = Object.keys(env)
     .sort()

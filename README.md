@@ -146,7 +146,7 @@ in SSM Parameter Store (`/isb-pipeline/config`). Update it by editing `.env`
 and running:
 
 ```bash
-./scripts/update_ssm.sh
+npm run config:push
 ```
 
 The script reads `TOOLING_REGION` from `.env` to target the correct region, and
@@ -165,7 +165,7 @@ Set `TRIGGER_ON_CONFIG_CHANGE=false` to opt out of the automatic re-trigger, or
 > appear within a minute or so, start one from the CodePipeline console —
 > the config is read at synth time, so any execution picks up the latest value.
 
-> **Run `update_ssm.sh` before the first pipeline execution.** The synth step
+> **Run `npm run config:push` before the first pipeline execution.** The synth step
 > reads *all* of its configuration from the parameter, so the parameter has to
 > exist before a run can succeed. `npm run deploy:pipeline` itself reads `.env`
 > directly and does not need it.
@@ -383,12 +383,13 @@ Failure notifications include `manual-approval-failed` and
 │       ├── nuke-image-step.ts       # AWS Nuke ECR build/push
 │       └── integration-test-step.ts # Post-deploy smoke tests
 ├── scripts/
-│   ├── update_ssm.sh               # Push .env config to SSM Parameter Store
-│   ├── load_ssm_config.sh          # Synth-time loader for the SSM config
-│   └── render_stage_diff.sh        # Multi-account `cdk diff` for approvals
+│   ├── load_ssm_config.sh          # Synth-time loader for the SSM config (pre-npm-ci)
+│   ├── render_stage_diff.sh        # Multi-account `cdk diff` for approvals
+│   └── update-ssm.ts               # Publish .env to SSM (`npm run config:push`)
 ├── test/
 │   ├── pipeline-stack.test.ts       # Unit tests (no AWS calls)
 │   ├── stage-config-file.test.ts    # Stage config file rendering
+│   ├── update-ssm.test.ts           # .env parsing / serialisation / region
 │   ├── approval-unblocker.test.ts   # Approval unblocker decision logic
 │   ├── support/
 │   │   └── check-approval-select.mjs  # ESM assertions run by the test above
@@ -572,7 +573,7 @@ and [CodeBuild pricing](https://aws.amazon.com/codebuild/pricing/).
 - **`Cannot find module 'aws-cdk-lib'`** — Run `npm install`.
 - **Config change did nothing** — Check the `<pipeline>-config-change`
   EventBridge rule in the tooling account: its `Invocations`/`FailedInvocations`
-  metrics tell you whether the SSM event arrived. `./scripts/update_ssm.sh`
+  metrics tell you whether the SSM event arrived. `npm run config:push`
   skips the write when the value is unchanged, so run it with `FORCE=1` if you
   need a new parameter version.
 - **A manual approval was rejected without anyone touching it** — Check the
@@ -587,7 +588,7 @@ and [CodeBuild pricing](https://aws.amazon.com/codebuild/pricing/).
   unblocker handle it; check the `<pipeline>-unblock-approval` rule's
   `Invocations` metric and the Lambda's logs to see what it decided.
 - **`isb-config-<Stage>.env is missing from the synth artifact`** — The synth
-  step ran before the config parameter existed. Run `./scripts/update_ssm.sh`
+  step ran before the config parameter existed. Run `npm run config:push`
   and start a new execution.
 - **The approval's diff link 404s or shows "Access Denied"** — The `Diff-<Stage>`
   step failed before uploading, or you lack `kms:Decrypt` on the pipeline

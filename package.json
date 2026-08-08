@@ -22,7 +22,8 @@
     "deploy:pipeline": "cdk deploy --require-approval never",
     "destroy:pipeline": "cdk destroy",
     "bootstrap:tooling": "cdk bootstrap",
-    "bootstrap:target": "echo 'Run cdk bootstrap aws://<account>/<region> --trust <tooling-account-id> --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess in each target account'"
+    "bootstrap:target": "echo 'Run cdk bootstrap aws://<account>/<region> --trust <tooling-account-id> --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess in each target account'",
+    "config:push": "ts-node scripts/update-ssm.ts"
   },
   "devDependencies": {
     "@aws-sdk/client-api-gateway": "^3.682.0",

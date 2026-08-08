@@ -142,7 +142,7 @@ export interface PipelineConfig {
 
   /**
    * Name of the SSM parameter that holds the pipeline configuration (the JSON
-   * blob written by `scripts/update_ssm.sh`). The synth step reads it, and the
+   * blob written by `npm run config:push`). The synth step reads it, and the
    * pipeline starts a new execution whenever it changes.
    *
    * @default "/isb-pipeline/config"
