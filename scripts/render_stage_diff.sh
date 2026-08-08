@@ -76,11 +76,19 @@ for TARGET in "$@"; do
 
   # cdk diff writes the human-readable diff to stderr, so fold both streams in.
   # --no-color keeps ANSI escapes out of a file that gets read in a browser.
+  #
+  # Set DIFF_VERBOSE=1 to add `-v`, which prints WHY a read-only change set
+  # could not be created ("Could not create a change set, will base the diff on
+  # template differences"). Change-set mode gives accurate replacement info, so
+  # the reason it falls back is worth seeing. Leave unset in normal operation -
+  # -v is extremely noisy.
+  VERBOSE_FLAG=""
+  [ "${DIFF_VERBOSE:-0}" = "1" ] && VERBOSE_FLAG="-v"
   : >"$STACK_DIFF"
   if AWS_REGION="$REGION" \
     CDK_DEFAULT_ACCOUNT="$ACCOUNT" \
     CDK_DEFAULT_REGION="$REGION" \
-    $CDK diff "$STACK" --no-color >"$STACK_DIFF" 2>&1; then
+    $CDK diff "$STACK" --no-color $VERBOSE_FLAG >"$STACK_DIFF" 2>&1; then
     DIFF_OK=1
   else
     DIFF_OK=0
