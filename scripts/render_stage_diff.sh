@@ -31,6 +31,44 @@ DEPLOY_ROLE_NAME="${DEPLOY_ROLE_NAME:-InnovationSandboxPipelineDeployRole}"
 TOOLING_ACCOUNT="${TOOLING_ACCOUNT:-}"
 CDK="npm run --silent --workspace @amzn/innovation-sandbox-infrastructure cdk --"
 
+# Read-only change sets are subject to the same CloudFormation validation as a
+# real deploy: every required Parameter must be supplied, or CreateChangeSet
+# throws MissingParameters and cdk diff silently falls back to a template-only
+# diff ("Could not create a change set..."). This mirrors stackDeployCmd in
+# lib/steps/deploy-step.ts exactly - same stacks, same parameters, same
+# required/optional split - so the two cannot drift out of sync again.
+stack_parameters() {
+  case "$1" in
+    InnovationSandbox-AccountPool)
+      printf -- '--parameters ParentOuId=%s --parameters HubAccountId=%s --parameters IsbManagedRegions=%s' \
+        "${PARENT_OU_ID:?PARENT_OU_ID is required}" \
+        "${HUB_ACCOUNT_ID:?HUB_ACCOUNT_ID is required}" \
+        "${AWS_REGIONS:?AWS_REGIONS is required}"
+      ;;
+    InnovationSandbox-IDC)
+      printf -- '--parameters IdentityStoreId=%s --parameters SsoInstanceArn=%s --parameters OrgMgtAccountId=%s --parameters HubAccountId=%s --parameters AdminGroupName=%s --parameters ManagerGroupName=%s --parameters UserGroupName=%s' \
+        "${IDENTITY_STORE_ID:?IDENTITY_STORE_ID is required}" \
+        "${SSO_INSTANCE_ARN:?SSO_INSTANCE_ARN is required}" \
+        "${ORG_MGT_ACCOUNT_ID:?ORG_MGT_ACCOUNT_ID is required}" \
+        "${HUB_ACCOUNT_ID:?HUB_ACCOUNT_ID is required}" \
+        "${ADMIN_GROUP_NAME:-InnovationSandboxAdmins}" \
+        "${MANAGER_GROUP_NAME:-InnovationSandboxManagers}" \
+        "${USER_GROUP_NAME:-InnovationSandboxUsers}"
+      ;;
+    InnovationSandbox-Data)
+      ;; # No CloudFormation Parameters on this stack.
+    InnovationSandbox-Compute)
+      printf -- '--parameters OrgMgtAccountId=%s --parameters IdcAccountId=%s --parameters AcceptSolutionTermsOfUse=%s' \
+        "${ORG_MGT_ACCOUNT_ID:?ORG_MGT_ACCOUNT_ID is required}" \
+        "${IDC_ACCOUNT_ID:?IDC_ACCOUNT_ID is required}" \
+        "${ACCEPT_SOLUTION_TERMS_OF_USE:-Accept}"
+      ;;
+    *)
+      echo "WARNING: no known CloudFormation Parameters for stack '$1'; diff may fail to create a change set." >&2
+      ;;
+  esac
+}
+
 DETAILS_FILE="$(mktemp)"
 SUMMARY_FILE="$(mktemp)"
 STACK_DIFF="$(mktemp)"
@@ -89,11 +127,24 @@ for TARGET in "$@"; do
   # --context deploymentMode must match what deploy-step.ts passes to `cdk
   # deploy` for this same stack, or the diff compares against the wrong
   # baseline.
+  #
+  # STACK_PARAMS is intentionally unquoted below: it is a space-separated list
+  # of "--parameters Key=Value" pairs built by stack_parameters(), and none of
+  # the values it substitutes contain spaces (account IDs, ARNs, region lists,
+  # group names), so word-splitting is the desired behaviour here.
+  if ! STACK_PARAMS="$(stack_parameters "$STACK" 2>&1)"; then
+    echo "Could not resolve required parameters for ${STACK}: ${STACK_PARAMS}" >>"$DETAILS_FILE"
+    printf '%s (%s/%s)\n  !! missing a required config variable - diff unavailable\n\n' \
+      "$STACK" "$ACCOUNT" "$REGION" >>"$SUMMARY_FILE"
+    NEEDS_ATTENTION=1
+    continue
+  fi
   if AWS_REGION="$REGION" \
     CDK_DEFAULT_ACCOUNT="$ACCOUNT" \
     CDK_DEFAULT_REGION="$REGION" \
     $CDK diff "$STACK" --no-color $VERBOSE_FLAG \
       --context deploymentMode="${DEPLOYMENT_MODE:-STANDARD}" \
+      $STACK_PARAMS \
       >"$STACK_DIFF" 2>&1; then
     DIFF_OK=1
   else
