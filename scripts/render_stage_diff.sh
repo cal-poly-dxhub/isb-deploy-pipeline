@@ -85,10 +85,16 @@ for TARGET in "$@"; do
   VERBOSE_FLAG=""
   [ "${DIFF_VERBOSE:-0}" = "1" ] && VERBOSE_FLAG="-v"
   : >"$STACK_DIFF"
+  #
+  # --context deploymentMode must match what deploy-step.ts passes to `cdk
+  # deploy` for this same stack, or the diff compares against the wrong
+  # baseline.
   if AWS_REGION="$REGION" \
     CDK_DEFAULT_ACCOUNT="$ACCOUNT" \
     CDK_DEFAULT_REGION="$REGION" \
-    $CDK diff "$STACK" --no-color $VERBOSE_FLAG >"$STACK_DIFF" 2>&1; then
+    $CDK diff "$STACK" --no-color $VERBOSE_FLAG \
+      --context deploymentMode="${DEPLOYMENT_MODE:-STANDARD}" \
+      >"$STACK_DIFF" 2>&1; then
     DIFF_OK=1
   else
     DIFF_OK=0
