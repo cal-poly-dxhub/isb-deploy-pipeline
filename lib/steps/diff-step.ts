@@ -67,6 +67,13 @@ export interface DiffStepProps {
 
   /** Tooling account; targets here are diffed without assuming a role. */
   readonly toolingAccount: string;
+
+  /**
+   * If true, passes `DIFF_VERBOSE=1` to render_stage_diff.sh, which adds `-v`
+   * to the `cdk diff` call. Surfaces WHY a read-only change set could not be
+   * created, at the cost of a much noisier build log. Off by default.
+   */
+  readonly diffVerbose?: boolean;
 }
 
 /**
@@ -108,7 +115,7 @@ export function createDiffStep(props: DiffStepProps): CodeBuildStep {
       `if [ ! -f "${configPath}" ]; then echo "ERROR: ${configPath} is missing from the synth artifact." >&2; exit 1; fi`,
       `set -a && . "${configPath}" && set +a`,
       'npm ci --no-audit --no-fund',
-      `TOOLING_ACCOUNT=${props.toolingAccount} bash ${PIPELINE_REPO_INPUT_DIR}/scripts/render_stage_diff.sh /tmp/isb-diff.txt ${targetArgs}`,
+      `TOOLING_ACCOUNT=${props.toolingAccount} DIFF_VERBOSE=${props.diffVerbose ? '1' : '0'} bash ${PIPELINE_REPO_INPUT_DIR}/scripts/render_stage_diff.sh /tmp/isb-diff.txt ${targetArgs}`,
       // Surface it in the build log too, so the diff survives even if the
       // upload fails.
       'cat /tmp/isb-diff.txt',

@@ -206,6 +206,7 @@ export function loadPipelineConfig(): PipelineConfig {
     )!,
     triggerOnConfigChange: booleanEnv('TRIGGER_ON_CONFIG_CHANGE', true),
     unblockStaleApprovals: booleanEnv('UNBLOCK_STALE_APPROVALS', true),
+    diffVerbose: booleanEnv('DIFF_VERBOSE', false),
     notificationEmails: listEnv('NOTIFICATION_EMAILS'),
     stages,
   };

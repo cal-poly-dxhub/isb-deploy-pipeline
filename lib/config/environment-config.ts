@@ -172,4 +172,14 @@ export interface PipelineConfig {
    * @default true
    */
   readonly unblockStaleApprovals?: boolean;
+
+  /**
+   * If true, the pre-approval `cdk diff` step runs with `-v`, which prints why
+   * a read-only change set could not be created (falling back to a less
+   * accurate template-only diff). Off by default because `-v` is very noisy;
+   * turn it on temporarily when investigating a diff, not permanently.
+   *
+   * @default false
+   */
+  readonly diffVerbose?: boolean;
 }

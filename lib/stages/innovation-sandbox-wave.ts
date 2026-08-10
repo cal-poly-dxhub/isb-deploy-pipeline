@@ -46,6 +46,13 @@ export interface InnovationSandboxWaveProps {
 
   /** Region the pipeline (and diff bucket) live in. */
   readonly toolingRegion: string;
+
+  /**
+   * If true, the pre-approval `cdk diff` runs with `-v`, surfacing why a
+   * read-only change set could not be created. Off by default; see
+   * PipelineConfig.diffVerbose.
+   */
+  readonly diffVerbose?: boolean;
 }
 
 /**
@@ -103,6 +110,7 @@ export function addInnovationSandboxDeployment(
       diffKeyArn: props.diffKeyArn,
       region: props.toolingRegion,
       toolingAccount,
+      diffVerbose: props.diffVerbose,
     });
     wave.addPre(diffStep);
 

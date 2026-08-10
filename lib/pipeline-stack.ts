@@ -338,6 +338,7 @@ export class PipelineStack extends Stack {
         diffBucketName: artifactBucket.bucketName,
         diffBucketArn: artifactBucket.bucketArn,
         diffKeyArn: artifactKey.keyArn,
+        diffVerbose: config.diffVerbose ?? false,
         scope: this,
       });
     }
