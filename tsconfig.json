@@ -23,5 +23,5 @@
     "typeRoots": ["./node_modules/@types"]
   },
   "exclude": ["node_modules", "cdk.out", "dist"],
-  "include": ["bin/**/*.ts", "lib/**/*.ts", "test/**/*.ts"]
+  "include": ["bin/**/*.ts", "lib/**/*.ts", "scripts/**/*.ts", "test/**/*.ts"]
 }

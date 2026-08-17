@@ -3,16 +3,22 @@ import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { CodeBuildStep, CodePipelineSource, IFileSetProducer } from 'aws-cdk-lib/pipelines';
 
+import { CONFIG_INPUT_DIR, stageConfigPath } from '../config/stage-config-file';
+
 export interface IntegrationTestStepProps {
   readonly stageName: string;
   /** The pipeline repo source (has package.json, test files, package-lock.json). */
   readonly input: CodePipelineSource;
+  /**
+   * The synth output, mounted as an additional input so the step can read the
+   * namespace from the stage config file at runtime rather than having it
+   * baked into the pipeline definition.
+   */
+  readonly configFileSet: IFileSetProducer;
   readonly hubAccount: string;
   readonly hubRegion: string;
   /** Org Management account ID. */
   readonly orgMgtAccount: string;
-  /** Namespace passed via ISB_NAMESPACE so test stack lookups resolve. */
-  readonly namespace: string;
   /** Org Management region (for AWS Organizations tests). Defaults to hub. */
   readonly orgMgtRegion?: string;
   /**
@@ -58,11 +64,22 @@ export function createIntegrationTestStep(
         'export ISB_ORG_MGT_AWS_SESSION_TOKEN=$(echo $ORG_CREDS | jq -r .Credentials.SessionToken)',
       ];
 
+  const configPath = stageConfigPath(props.stageName);
+
   return new CodeBuildStep(`IntegrationTest-${props.stageName}`, {
     input: props.input,
+    additionalInputs: {
+      [CONFIG_INPUT_DIR]: props.configFileSet,
+    },
     commands: [
       'set -eu',
       'echo "==> Running integration tests against ' + props.stageName + '"',
+      // NAMESPACE comes from the synth artifact so that changing it does not
+      // rewrite this project and force a pipeline self-mutation.
+      `if [ ! -f "${configPath}" ]; then echo "ERROR: ${configPath} is missing from the synth artifact." >&2; exit 1; fi`,
+      `set -a && . "${configPath}" && set +a`,
+      'export ISB_NAMESPACE="${NAMESPACE:?NAMESPACE missing from the stage config file}"',
+      'echo "==> ISB_NAMESPACE=$ISB_NAMESPACE"',
       // Assume org mgmt role first (while we still have CodeBuild role creds).
       ...orgMgtRoleCommands,
       // Then assume hub role as default credentials.
@@ -75,7 +92,6 @@ export function createIntegrationTestStep(
     ],
     env: {
       ISB_HUB_REGION: props.hubRegion,
-      ISB_NAMESPACE: props.namespace,
       ISB_ORG_MGT_ACCOUNT: orgMgtAccount,
       ...(props.orgMgtRegion ? { ISB_ORG_MGT_REGION: props.orgMgtRegion } : {}),
       ...(props.privateEcrRepo

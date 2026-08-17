@@ -139,4 +139,47 @@ export interface PipelineConfig {
    * deploy. This sets the PRIVATE_ECR_REPO* env vars used by upstream.
    */
   readonly buildAndPushNukeImage?: boolean;
+
+  /**
+   * Name of the SSM parameter that holds the pipeline configuration (the JSON
+   * blob written by `npm run config:push`). The synth step reads it, and the
+   * pipeline starts a new execution whenever it changes.
+   *
+   * @default "/isb-pipeline/config"
+   */
+  readonly configParameterName?: string;
+
+  /**
+   * If true, an EventBridge rule starts a pipeline execution whenever
+   * `configParameterName` is created or updated in SSM Parameter Store.
+   *
+   * Without this, a config change sits unused until some unrelated git push
+   * happens to trigger a run, because the config is only read during synth.
+   *
+   * @default true
+   */
+  readonly triggerOnConfigChange?: boolean;
+
+  /**
+   * If true, a Lambda rejects a pending manual approval when a newer execution
+   * is blocked behind it.
+   *
+   * SUPERSEDED mode only supersedes executions between stages, so an execution
+   * parked on an approval holds its stage lock and newer executions queue up as
+   * inbound indefinitely (up to the non-configurable seven-day approval
+   * timeout). Rejecting the stale approval releases the lock.
+   *
+   * @default true
+   */
+  readonly unblockStaleApprovals?: boolean;
+
+  /**
+   * If true, the pre-approval `cdk diff` step runs with `-v`, which prints why
+   * a read-only change set could not be created (falling back to a less
+   * accurate template-only diff). Off by default because `-v` is very noisy;
+   * turn it on temporarily when investigating a diff, not permanently.
+   *
+   * @default false
+   */
+  readonly diffVerbose?: boolean;
 }
