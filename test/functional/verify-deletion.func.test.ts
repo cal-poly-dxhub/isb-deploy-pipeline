@@ -18,6 +18,7 @@ import {
 jest.setTimeout(300_000);
 
 describe("Deletion Verification", () => {
+  it("has admin credentials and a teardown state", () => {
     expect(adminCredentials()).toBeDefined();
     const state = loadState();
     expect(state.leaseAccountId).toBeDefined();
