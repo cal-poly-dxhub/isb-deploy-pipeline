@@ -342,9 +342,54 @@ describe('PipelineStack', () => {
     }
   });
 
+
+  it('uses the Node 24 runtime required by upstream v1.3.0', () => {
+    const projects = template.findResources('AWS::CodeBuild::Project');
+    expect(Object.keys(projects).length).toBeGreaterThan(0);
+    for (const project of Object.values(projects)) {
+      expect(project.Properties.Environment.Image).toBe(
+        'aws/codebuild/standard:7.0',
+      );
+      const buildSpec = JSON.stringify(
+        project.Properties.Source.BuildSpec,
+      ).replace(/\\/g, '');
+      expect(buildSpec).toContain('"nodejs": "24"');
+    }
+  });
+
+  it('passes required v1.3.0 authentication and namespace parameters', () => {
+    const projects = template.findResources('AWS::CodeBuild::Project');
+    const buildSpecs = Object.values(projects).map((project) =>
+      JSON.stringify(project.Properties.Source.BuildSpec),
+    );
+    const deploySpec = (stack: string) => {
+      const spec = buildSpecs.find((candidate) =>
+        candidate.includes(`Deploying upstream stack: ${stack}`),
+      );
+      expect(spec).toBeDefined();
+      return spec!;
+    };
+
+    for (const stack of ['account-pool', 'idc', 'data', 'compute']) {
+      expect(deploySpec(stack)).toContain('Namespace=${NAMESPACE');
+    }
+    expect(deploySpec('data')).toContain(
+      'SamlMetadataUrl=${SAML_METADATA_URL',
+    );
+    expect(deploySpec('data')).toContain(
+      'AwsAccessPortalUrl=${AWS_ACCESS_PORTAL_URL',
+    );
+    expect(deploySpec('account-pool')).toContain(
+      'AdditionalPrincipalExceptions',
+    );
+    expect(deploySpec('account-pool')).toContain(
+      'BedrockInferenceProfilePatterns',
+    );
+    expect(deploySpec('compute')).toContain('AllowListedIPRanges');
+  });
   it('creates an approval unblocker for every manual approval action', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
-      Runtime: 'nodejs22.x',
+      Runtime: 'nodejs24.x',
       Environment: {
         Variables: Match.objectLike({
           PIPELINE_NAME: 'TestInnovationSandboxPipeline',

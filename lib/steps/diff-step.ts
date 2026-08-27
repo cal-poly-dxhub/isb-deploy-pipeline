@@ -125,7 +125,7 @@ export function createDiffStep(props: DiffStepProps): CodeBuildStep {
       `echo "==> Diff published to ${stageDiffUrl(props.stageName, props.diffBucketName, props.region)}"`,
     ],
     buildEnvironment: {
-      buildImage: codebuild.LinuxBuildImage.AMAZON_LINUX_2_5,
+      buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
       computeType: codebuild.ComputeType.MEDIUM,
     },
     timeout: Duration.minutes(30),
