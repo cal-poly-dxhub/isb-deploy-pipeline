@@ -416,6 +416,20 @@ describe('PipelineStack', () => {
         status: 0,
         stderr: '',
       });
+
+      const optionalContexts = commands.filter((command) =>
+        command.startsWith('if [ -n '),
+      );
+      const setE = spawnSync('/bin/sh', ['-eu'], {
+        input: optionalContexts.join('\n'),
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH },
+      });
+      expect({ name, status: setE.status, stderr: setE.stderr }).toEqual({
+        name,
+        status: 0,
+        stderr: '',
+      });
     }
   });
 
