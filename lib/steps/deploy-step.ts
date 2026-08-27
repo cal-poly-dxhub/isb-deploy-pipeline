@@ -104,10 +104,10 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
   // BedrockInferenceProfilePatterns. Keep this mapping in sync with
   // scripts/render_stage_diff.sh so approval diffs use the same parameters.
   const stackDeployCmd: Record<UpstreamStack, string> = {
-    'account-pool': 'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- deploy InnovationSandbox-AccountPool "${CDK_CONTEXT_ARGS[@]}" --require-approval=never --parameters Namespace=${NAMESPACE:?NAMESPACE is required} --parameters ParentOuId=${PARENT_OU_ID:?PARENT_OU_ID is required} --parameters HubAccountId=${HUB_ACCOUNT_ID:?HUB_ACCOUNT_ID is required} --parameters IsbManagedRegions=${AWS_REGIONS:?AWS_REGIONS is required} ${ADDITIONAL_ALLOWED_SERVICES:+--parameters AdditionalAllowedServices=$ADDITIONAL_ALLOWED_SERVICES} ${ADDITIONAL_PRINCIPAL_EXCEPTIONS:+--parameters AdditionalPrincipalExceptions=$ADDITIONAL_PRINCIPAL_EXCEPTIONS} ${BEDROCK_INFERENCE_PROFILE_PATTERNS:+--parameters BedrockInferenceProfilePatterns=$BEDROCK_INFERENCE_PROFILE_PATTERNS}',
-    idc: 'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- deploy InnovationSandbox-IDC "${CDK_CONTEXT_ARGS[@]}" --require-approval=never --parameters Namespace=${NAMESPACE:?NAMESPACE is required} --parameters IdentityStoreId=${IDENTITY_STORE_ID:?IDENTITY_STORE_ID is required} --parameters SsoInstanceArn=${SSO_INSTANCE_ARN:?SSO_INSTANCE_ARN is required} --parameters OrgMgtAccountId=${ORG_MGT_ACCOUNT_ID:?ORG_MGT_ACCOUNT_ID is required} --parameters HubAccountId=${HUB_ACCOUNT_ID:?HUB_ACCOUNT_ID is required} ${ADMIN_GROUP_NAME:+--parameters AdminGroupName=$ADMIN_GROUP_NAME} ${MANAGER_GROUP_NAME:+--parameters ManagerGroupName=$MANAGER_GROUP_NAME} ${USER_GROUP_NAME:+--parameters UserGroupName=$USER_GROUP_NAME}',
-    data: 'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- deploy InnovationSandbox-Data "${CDK_CONTEXT_ARGS[@]}" --require-approval=never --parameters Namespace=${NAMESPACE:?NAMESPACE is required} --parameters SamlMetadataUrl=${SAML_METADATA_URL:?SAML_METADATA_URL is required for v1.3.0} --parameters AwsAccessPortalUrl=${AWS_ACCESS_PORTAL_URL:?AWS_ACCESS_PORTAL_URL is required for v1.3.0}',
-    compute: 'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- deploy InnovationSandbox-Compute "${CDK_CONTEXT_ARGS[@]}" --require-approval=never --parameters Namespace=${NAMESPACE:?NAMESPACE is required} --parameters OrgMgtAccountId=${ORG_MGT_ACCOUNT_ID:?ORG_MGT_ACCOUNT_ID is required} --parameters IdcAccountId=${IDC_ACCOUNT_ID:?IDC_ACCOUNT_ID is required} --parameters AcceptSolutionTermsOfUse=${ACCEPT_SOLUTION_TERMS_OF_USE:-Accept} ${CUSTOM_DOMAIN_NAME:+--parameters CustomDomainName=$CUSTOM_DOMAIN_NAME} ${CUSTOM_DOMAIN_CERTIFICATE_ARN:+--parameters CustomDomainCertificateArn=$CUSTOM_DOMAIN_CERTIFICATE_ARN} ${ALLOW_LISTED_IP_RANGES:+--parameters AllowListedIPRanges=$ALLOW_LISTED_IP_RANGES} ${USE_STABLE_TAGGING:+--parameters UseStableTagging=$USE_STABLE_TAGGING}',
+    'account-pool': 'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- deploy InnovationSandbox-AccountPool "$@" --require-approval=never --parameters Namespace=${NAMESPACE:?NAMESPACE is required} --parameters ParentOuId=${PARENT_OU_ID:?PARENT_OU_ID is required} --parameters HubAccountId=${HUB_ACCOUNT_ID:?HUB_ACCOUNT_ID is required} --parameters IsbManagedRegions=${AWS_REGIONS:?AWS_REGIONS is required} ${ADDITIONAL_ALLOWED_SERVICES:+--parameters AdditionalAllowedServices=$ADDITIONAL_ALLOWED_SERVICES} ${ADDITIONAL_PRINCIPAL_EXCEPTIONS:+--parameters AdditionalPrincipalExceptions=$ADDITIONAL_PRINCIPAL_EXCEPTIONS} ${BEDROCK_INFERENCE_PROFILE_PATTERNS:+--parameters BedrockInferenceProfilePatterns=$BEDROCK_INFERENCE_PROFILE_PATTERNS}',
+    idc: 'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- deploy InnovationSandbox-IDC "$@" --require-approval=never --parameters Namespace=${NAMESPACE:?NAMESPACE is required} --parameters IdentityStoreId=${IDENTITY_STORE_ID:?IDENTITY_STORE_ID is required} --parameters SsoInstanceArn=${SSO_INSTANCE_ARN:?SSO_INSTANCE_ARN is required} --parameters OrgMgtAccountId=${ORG_MGT_ACCOUNT_ID:?ORG_MGT_ACCOUNT_ID is required} --parameters HubAccountId=${HUB_ACCOUNT_ID:?HUB_ACCOUNT_ID is required} ${ADMIN_GROUP_NAME:+--parameters AdminGroupName=$ADMIN_GROUP_NAME} ${MANAGER_GROUP_NAME:+--parameters ManagerGroupName=$MANAGER_GROUP_NAME} ${USER_GROUP_NAME:+--parameters UserGroupName=$USER_GROUP_NAME}',
+    data: 'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- deploy InnovationSandbox-Data "$@" --require-approval=never --parameters Namespace=${NAMESPACE:?NAMESPACE is required} --parameters SamlMetadataUrl=${SAML_METADATA_URL:?SAML_METADATA_URL is required for v1.3.0} --parameters AwsAccessPortalUrl=${AWS_ACCESS_PORTAL_URL:?AWS_ACCESS_PORTAL_URL is required for v1.3.0}',
+    compute: 'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- deploy InnovationSandbox-Compute "$@" --require-approval=never --parameters Namespace=${NAMESPACE:?NAMESPACE is required} --parameters OrgMgtAccountId=${ORG_MGT_ACCOUNT_ID:?ORG_MGT_ACCOUNT_ID is required} --parameters IdcAccountId=${IDC_ACCOUNT_ID:?IDC_ACCOUNT_ID is required} --parameters AcceptSolutionTermsOfUse=${ACCEPT_SOLUTION_TERMS_OF_USE:-Accept} ${CUSTOM_DOMAIN_NAME:+--parameters CustomDomainName=$CUSTOM_DOMAIN_NAME} ${CUSTOM_DOMAIN_CERTIFICATE_ARN:+--parameters CustomDomainCertificateArn=$CUSTOM_DOMAIN_CERTIFICATE_ARN} ${ALLOW_LISTED_IP_RANGES:+--parameters AllowListedIPRanges=$ALLOW_LISTED_IP_RANGES} ${USE_STABLE_TAGGING:+--parameters UseStableTagging=$USE_STABLE_TAGGING}',
   };
 
   // Only assume a cross-account role if deploying to a different account than
@@ -147,22 +147,23 @@ export function createDeployStep(props: DeployStepProps): CodeBuildStep {
       ...assumeRoleCommands,
       'npm ci --no-audit --no-fund',
       // Build the same optional context list as upstream v1.3.0 deploy.sh.
-      // Arrays preserve values as single arguments and avoid shell injection
-      // through spaces in operator-provided settings.
-      'CDK_CONTEXT_ARGS=(--context "deploymentMode=${DEPLOYMENT_MODE:-prod}")',
-      '[ -n "${LOG_LEVEL:-}" ] && CDK_CONTEXT_ARGS+=(--context "logLevel=$LOG_LEVEL")',
-      '[ -n "${CLOUDWATCH_LOG_RETENTION_IN_DAYS:-}" ] && CDK_CONTEXT_ARGS+=(--context "cloudWatchLogRetentionInDays=$CLOUDWATCH_LOG_RETENTION_IN_DAYS")',
-      '[ -n "${S3_LOGS_ARCHIVE_RETENTION_IN_DAYS:-}" ] && CDK_CONTEXT_ARGS+=(--context "s3LogsArchiveRetentionInDays=$S3_LOGS_ARCHIVE_RETENTION_IN_DAYS")',
-      '[ -n "${S3_LOGS_GLACIER_RETENTION_IN_DAYS:-}" ] && CDK_CONTEXT_ARGS+=(--context "s3LogsGlacierRetentionInDays=$S3_LOGS_GLACIER_RETENTION_IN_DAYS")',
-      '[ -n "${API_THROTTLING_RATE_LIMIT:-}" ] && CDK_CONTEXT_ARGS+=(--context "apiThrottlingRateLimit=$API_THROTTLING_RATE_LIMIT")',
-      '[ -n "${API_THROTTLING_BURST_LIMIT:-}" ] && CDK_CONTEXT_ARGS+=(--context "apiThrottlingBurstLimit=$API_THROTTLING_BURST_LIMIT")',
-      '[ -n "${COGNITO_ACCESS_TOKEN_VALIDITY_MINUTES:-}" ] && CDK_CONTEXT_ARGS+=(--context "cognitoAccessTokenValidityMinutes=$COGNITO_ACCESS_TOKEN_VALIDITY_MINUTES")',
-      '[ -n "${COGNITO_ID_TOKEN_VALIDITY_MINUTES:-}" ] && CDK_CONTEXT_ARGS+=(--context "cognitoIdTokenValidityMinutes=$COGNITO_ID_TOKEN_VALIDITY_MINUTES")',
-      '[ -n "${COGNITO_REFRESH_TOKEN_VALIDITY_DAYS:-}" ] && CDK_CONTEXT_ARGS+=(--context "cognitoRefreshTokenValidityDays=$COGNITO_REFRESH_TOKEN_VALIDITY_DAYS")',
-      '[ -n "${NUKE_CONFIG_FILE_PATH:-}" ] && CDK_CONTEXT_ARGS+=(--context "nukeConfigFilePath=$NUKE_CONFIG_FILE_PATH")',
-      '[ -n "${SCP_DIRECTORY_PATH:-}" ] && CDK_CONTEXT_ARGS+=(--context "scpDirectoryPath=$SCP_DIRECTORY_PATH")',
-      '[ -n "${PRIVATE_ECR_REPO:-}" ] && CDK_CONTEXT_ARGS+=(--context "privateEcrRepo=$PRIVATE_ECR_REPO")',
-      'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- synth "${CDK_CONTEXT_ARGS[@]}"',
+      // CodeBuild runs commands with /bin/sh, so use POSIX positional
+      // parameters rather than Bash arrays. Quoting "$@" preserves each
+      // context key/value as one argument.
+      'set -- --context "deploymentMode=${DEPLOYMENT_MODE:-prod}"',
+      '[ -n "${LOG_LEVEL:-}" ] && set -- "$@" --context "logLevel=$LOG_LEVEL"',
+      '[ -n "${CLOUDWATCH_LOG_RETENTION_IN_DAYS:-}" ] && set -- "$@" --context "cloudWatchLogRetentionInDays=$CLOUDWATCH_LOG_RETENTION_IN_DAYS"',
+      '[ -n "${S3_LOGS_ARCHIVE_RETENTION_IN_DAYS:-}" ] && set -- "$@" --context "s3LogsArchiveRetentionInDays=$S3_LOGS_ARCHIVE_RETENTION_IN_DAYS"',
+      '[ -n "${S3_LOGS_GLACIER_RETENTION_IN_DAYS:-}" ] && set -- "$@" --context "s3LogsGlacierRetentionInDays=$S3_LOGS_GLACIER_RETENTION_IN_DAYS"',
+      '[ -n "${API_THROTTLING_RATE_LIMIT:-}" ] && set -- "$@" --context "apiThrottlingRateLimit=$API_THROTTLING_RATE_LIMIT"',
+      '[ -n "${API_THROTTLING_BURST_LIMIT:-}" ] && set -- "$@" --context "apiThrottlingBurstLimit=$API_THROTTLING_BURST_LIMIT"',
+      '[ -n "${COGNITO_ACCESS_TOKEN_VALIDITY_MINUTES:-}" ] && set -- "$@" --context "cognitoAccessTokenValidityMinutes=$COGNITO_ACCESS_TOKEN_VALIDITY_MINUTES"',
+      '[ -n "${COGNITO_ID_TOKEN_VALIDITY_MINUTES:-}" ] && set -- "$@" --context "cognitoIdTokenValidityMinutes=$COGNITO_ID_TOKEN_VALIDITY_MINUTES"',
+      '[ -n "${COGNITO_REFRESH_TOKEN_VALIDITY_DAYS:-}" ] && set -- "$@" --context "cognitoRefreshTokenValidityDays=$COGNITO_REFRESH_TOKEN_VALIDITY_DAYS"',
+      '[ -n "${NUKE_CONFIG_FILE_PATH:-}" ] && set -- "$@" --context "nukeConfigFilePath=$NUKE_CONFIG_FILE_PATH"',
+      '[ -n "${SCP_DIRECTORY_PATH:-}" ] && set -- "$@" --context "scpDirectoryPath=$SCP_DIRECTORY_PATH"',
+      '[ -n "${PRIVATE_ECR_REPO:-}" ] && set -- "$@" --context "privateEcrRepo=$PRIVATE_ECR_REPO"',
+      'npm run --workspace @amzn/innovation-sandbox-infrastructure cdk -- synth "$@"',
       stackDeployCmd[props.stack],
     ],
     env: buildEnvVars,

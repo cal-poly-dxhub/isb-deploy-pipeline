@@ -1,3 +1,4 @@
+import { spawnSync } from 'child_process';
 import { App } from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 
@@ -387,6 +388,37 @@ describe('PipelineStack', () => {
     );
     expect(deploySpec('compute')).toContain('AllowListedIPRanges');
   });
+
+  it('generates POSIX-compatible deploy commands for CodeBuild /bin/sh', () => {
+    const projects = template.findResources('AWS::CodeBuild::Project');
+    const deployProjects = Object.entries(projects).filter(([name]) =>
+      name.includes('Deploy'),
+    );
+    expect(deployProjects.length).toBeGreaterThan(0);
+
+    for (const [name, project] of deployProjects) {
+      const rawBuildSpec = project.Properties.Source.BuildSpec;
+      expect(typeof rawBuildSpec).toBe('string');
+      const buildSpec = JSON.parse(rawBuildSpec as string);
+      const commands = buildSpec.phases.build.commands as string[];
+      const script = commands.join('\n');
+
+      expect(script).toContain('set -- --context');
+      expect(script).toContain('"$@"');
+      expect(script).not.toMatch(/CDK_CONTEXT_ARGS|\+=\(|=\([^)]/);
+
+      const syntax = spawnSync('/bin/sh', ['-n'], {
+        input: script,
+        encoding: 'utf8',
+      });
+      expect({ name, status: syntax.status, stderr: syntax.stderr }).toEqual({
+        name,
+        status: 0,
+        stderr: '',
+      });
+    }
+  });
+
   it('creates an approval unblocker for every manual approval action', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
       Runtime: 'nodejs24.x',
