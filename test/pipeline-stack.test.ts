@@ -26,6 +26,7 @@ const testConfig: PipelineConfig = {
   stages: [
     {
       stageName: 'Dev',
+      runIntegrationTests: true,
       accounts: {
         orgManagement: { account: '111111111111', region: 'us-east-1' },
         idc: { account: '222222222222', region: 'us-east-1' },
@@ -356,6 +357,26 @@ describe('PipelineStack', () => {
       ).replace(/\\/g, '');
       expect(buildSpec).toContain('"nodejs": "24"');
     }
+  });
+
+  it('gives the integration suite enough Node heap and CodeBuild memory', () => {
+    const projects = template.findResources('AWS::CodeBuild::Project');
+    const integration = Object.entries(projects).find(([name]) =>
+      name.includes('IntegrationTest'),
+    );
+    expect(integration).toBeDefined();
+    const project = integration![1];
+    expect(project.Properties.Environment.ComputeType).toBe(
+      'BUILD_GENERAL1_MEDIUM',
+    );
+    expect(project.Properties.Environment.EnvironmentVariables).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          Name: 'NODE_OPTIONS',
+          Value: '--max-old-space-size=4096',
+        }),
+      ]),
+    );
   });
 
   it('passes required v1.3.0 authentication and namespace parameters', () => {

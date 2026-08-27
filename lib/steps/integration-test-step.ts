@@ -91,6 +91,7 @@ export function createIntegrationTestStep(
       'npm run test:integration',
     ],
     env: {
+      NODE_OPTIONS: '--max-old-space-size=4096',
       ISB_HUB_REGION: props.hubRegion,
       ISB_ORG_MGT_ACCOUNT: orgMgtAccount,
       ...(props.orgMgtRegion ? { ISB_ORG_MGT_REGION: props.orgMgtRegion } : {}),
@@ -100,7 +101,7 @@ export function createIntegrationTestStep(
     },
     buildEnvironment: {
       buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
-      computeType: codebuild.ComputeType.SMALL,
+      computeType: codebuild.ComputeType.MEDIUM,
     },
     timeout: Duration.minutes(15),
     rolePolicyStatements: [
