@@ -55,7 +55,7 @@ export function createNukeImageBuildStep(
       PRIVATE_ECR_REPO_REGION: props.hubRegion,
     },
     buildEnvironment: {
-      buildImage: codebuild.LinuxBuildImage.AMAZON_LINUX_2_5,
+      buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
       computeType: codebuild.ComputeType.MEDIUM,
       privileged: true, // required for `docker build`
     },

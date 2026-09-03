@@ -6,8 +6,8 @@ solution across multiple AWS accounts and stages (Dev / Staging / Prod).
 
 ## Prerequisites
 
-- Node 22+ and npm 10+
-- AWS CDK 2.167+ (`npm install -g aws-cdk`)
+- Node 24+ and npm 10+
+- AWS CDK CLI 2.1139+ (`npm install -g aws-cdk`)
 - An AWS account designated as the **tooling account** (where the pipeline lives)
 - One or more sets of three AWS accounts per environment:
   - `orgManagement` — your AWS Organizations management account
@@ -183,8 +183,9 @@ config edit produces a CloudFormation diff, which triggers a self-mutation,
 which restarts the pipeline — so one config change yields _two_ executions, and
 the second can arrive while the first is parked on an approval. With config in
 the artifact, editing `NAMESPACE`, `PARENT_OU_ID`, `AWS_REGIONS`,
-`IDENTITY_STORE_ID`, `SSO_INSTANCE_ARN`, the IDC group names,
-`ALLOWED_IP_ADDRESSES`, or `AWS_NUKE_DRY_RUN_MODE` produces no pipeline diff at
+`IDENTITY_STORE_ID`, `SSO_INSTANCE_ARN`, the IDC group names, `ALLOW_LISTED_IP_RANGES`,
+`SAML_METADATA_URL`, `AWS_ACCESS_PORTAL_URL`, the AccountPool SCP customization
+values, or other v1.3.0 context settings produces no pipeline diff at
 all: one execution, no restart.
 
 Changes that _are_ structural still self-mutate and restart, because they alter
@@ -199,6 +200,99 @@ split one execution across two configurations.
 
 Push changes to either this repo (pipeline definition) or the upstream
 Innovation Sandbox repo to trigger a new run.
+
+## Upgrading an existing deployment to v1.3.0
+
+v1.3.0 is a breaking authentication upgrade: the web application moves from a
+custom SAML/JWT flow to an Amazon Cognito user pool federated to IAM Identity
+Center. The pipeline deploys the stacks in the required order — AccountPool,
+IDC, Data, Compute — but an operator must collect two values before deployment
+and reconfigure the existing SAML application after Data updates.
+
+### Before starting the pipeline
+
+1. In the existing ISB web UI, choose **Settings → General → Maintenance
+   Mode**, turn it on, choose **Save**, and confirm. Administrators retain
+   access; Managers and users are blocked during the update.
+2. In the Organizations management account, open **AWS Organizations →
+   Policies → Service control policies**. Compare each namespace-prefixed ISB
+   SCP attached to the account-pool OU with the pre-v1.3 baseline. Move any
+   direct edits into the matching stage variables:
+   - extra `NotAction` entries → `*_ADDITIONAL_ALLOWED_SERVICES`
+   - extra `ArnNotLike` role patterns → `*_ADDITIONAL_PRINCIPAL_EXCEPTIONS`
+   - Bedrock inference-profile patterns →
+     `*_BEDROCK_INFERENCE_PROFILE_PATTERNS`
+
+   The AccountPool update overwrites direct console edits. Once represented by
+   these CloudFormation parameters, the customizations persist on later runs.
+
+3. In the IAM Identity Center account, open **IAM Identity Center →
+   Applications → Customer managed**, then choose the existing Innovation
+   Sandbox SAML 2.0 application. Copy **IAM Identity Center SAML metadata URL**.
+4. In IAM Identity Center, copy **AWS access portal URL** from the Dashboard
+   (for example, `https://d-xxxxxxxxxx.awsapps.com/start`).
+5. Put both values into `.env` for every enabled pipeline stage, along with any
+   SCP values identified above:
+
+   ```dotenv
+   DEV_SAML_METADATA_URL=https://portal.sso.<region>.amazonaws.com/saml/metadata/...
+   DEV_AWS_ACCESS_PORTAL_URL=https://d-xxxxxxxxxx.awsapps.com/start
+   # DEV_ADDITIONAL_ALLOWED_SERVICES=sts:*,support:*,tag:*
+   # DEV_ADDITIONAL_PRINCIPAL_EXCEPTIONS=arn:aws:iam::*:role/CustomGovernanceRole*
+   # DEV_BEDROCK_INFERENCE_PROFILE_PATTERNS=arn:aws:bedrock:*:*:inference-profile/us.*
+   ```
+
+6. Run `npm run config:push`. Confirm `/isb-pipeline/config` in the tooling
+   account contains `DEV_SAML_METADATA_URL` and `DEV_AWS_ACCESS_PORTAL_URL`
+   (or the corresponding enabled-stage prefix) before allowing the deployment
+   to reach Data. These are required v1.3.0 parameters.
+
+### Run the upgrade and reconfigure SAML
+
+1. Start/release the pipeline and approve the stage after reviewing the diff.
+2. Monitor **CloudFormation → Stacks** in each target account. The expected
+   order is `InnovationSandbox-AccountPool`, `InnovationSandbox-IDC`,
+   `InnovationSandbox-Data`, then `InnovationSandbox-Compute`.
+3. When **InnovationSandbox-Data** reaches `UPDATE_COMPLETE` in the Hub account,
+   open its **Outputs** tab and copy:
+   - `CognitoAcsUrl`
+   - `CognitoAudience`
+4. In the IAM Identity Center account, open **IAM Identity Center →
+   Applications → Customer managed → [the existing ISB application] → Actions
+   → Edit configuration**. Under **Application metadata**, set:
+   - **Application ACS URL** = Data output `CognitoAcsUrl`
+   - **Application SAML audience** = Data output `CognitoAudience`
+
+   Choose **Submit**. A mismatch produces a _SAML assertion audience mismatch_
+   login error. The pipeline does not pause between Data and Compute, so this
+   console edit can be completed while Compute runs or immediately afterward.
+
+5. Wait for Compute and the pipeline integration tests to succeed. If Data
+   rolls back, inspect its CloudFormation events; the automatic AppConfig-to-
+   DynamoDB migration is transactional and does not modify the old config on a
+   failed update.
+
+### After the pipeline succeeds
+
+1. Open the CloudFront ISB URL and sign in through IAM Identity Center. Verify
+   an Administrator can open **Settings** and the Accounts/Leases pages.
+2. In **Settings**, review every section. Migrated sections initially show
+   `Last edited by system:migration`. The old AppConfig `GlobalConfig` and
+   `ReportingConfig` profiles remain because of deletion protection but are no
+   longer read; make future changes only in the web UI.
+3. Review the new defaults before restoring users:
+   - **Allow user lease termination** is on.
+   - **Max requests per window** is 10 in a rolling 168-hour window.
+   - **Account cooldown** defaults to 24 hours.
+   - **On validation failure** defaults to `Silent`.
+4. In **Settings → General → Maintenance Mode**, turn maintenance mode off,
+   choose **Save**, and confirm.
+5. If custom EventBridge/Lambda consumers parse ISB events, add
+   `UserTerminated` and manual `AccountQuarantined` handling. For cleanup
+   events, replace `stateMachineExecutionArn`/`stateMachineExecutionStartTime`
+   with `executionArn`/`executionStartTime`.
+6. Cost-allocation tag activation starts after Compute updates and can take up
+   to 24 hours; no console action is required.
 
 ## Dual-Source Architecture
 
@@ -454,9 +548,9 @@ step 5 above).
 | `api-gateway.int.test.ts`    | Compute-stack API URL is HTTPS, rejects unauthenticated requests with 401/403, and serves CORS preflight.                                                                                                              |
 | `web-ui.int.test.ts`         | CloudFront distribution is `Deployed` and the root URL returns a 200 with the SPA shell HTML.                                                                                                                          |
 | `dynamodb.int.test.ts`       | Each table referenced by Data-stack outputs is `ACTIVE`.                                                                                                                                                               |
-| `appconfig.int.test.ts`      | An InnovationSandbox AppConfig application exists and its latest deployment per environment is in a healthy state.                                                                                                     |
+| `appconfig.int.test.ts`      | v1.3 Data outputs resolve the retained cleanup AppConfig application and its latest deployment is healthy.                                                                                                              |
 | `lambda.int.test.ts`         | Every Lambda referenced by Compute-stack outputs is `Active` and not on a deprecated runtime.                                                                                                                          |
-| `step-functions.int.test.ts` | The cleanup state machine is `ACTIVE` and the last 20 executions don't have a 100% failure rate.                                                                                                                       |
+| `step-functions.int.test.ts` | The v1.3 durable cleanup Lambda is `Active`; remaining workflow state machines are `ACTIVE` and recent executions don't have a 100% failure rate.                                                                  |
 | `eventbridge.int.test.ts`    | A custom InnovationSandbox event bus exists, has at least one ENABLED rule, and every enabled rule has at least one target.                                                                                            |
 | `waf.int.test.ts`            | A regional WAF web ACL exists, has at least one rule, and is associated with at least one API Gateway stage.                                                                                                           |
 | `ecr.int.test.ts`            | (Skipped unless `ISB_PRIVATE_ECR_REPO` is set) The private AWS Nuke ECR repository exists and the latest image has a SHA-256 digest.                                                                                   |

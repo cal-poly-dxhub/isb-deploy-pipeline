@@ -1,3 +1,4 @@
+import { spawnSync } from 'child_process';
 import { App } from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 
@@ -25,6 +26,7 @@ const testConfig: PipelineConfig = {
   stages: [
     {
       stageName: 'Dev',
+      runIntegrationTests: true,
       accounts: {
         orgManagement: { account: '111111111111', region: 'us-east-1' },
         idc: { account: '222222222222', region: 'us-east-1' },
@@ -342,9 +344,119 @@ describe('PipelineStack', () => {
     }
   });
 
+
+  it('uses the Node 24 runtime required by upstream v1.3.0', () => {
+    const projects = template.findResources('AWS::CodeBuild::Project');
+    expect(Object.keys(projects).length).toBeGreaterThan(0);
+    for (const project of Object.values(projects)) {
+      expect(project.Properties.Environment.Image).toBe(
+        'aws/codebuild/standard:7.0',
+      );
+      const buildSpec = JSON.stringify(
+        project.Properties.Source.BuildSpec,
+      ).replace(/\\/g, '');
+      expect(buildSpec).toContain('"nodejs": "24"');
+    }
+  });
+
+  it('gives the integration suite enough Node heap and CodeBuild memory', () => {
+    const projects = template.findResources('AWS::CodeBuild::Project');
+    const integration = Object.entries(projects).find(([name]) =>
+      name.includes('IntegrationTest'),
+    );
+    expect(integration).toBeDefined();
+    const project = integration![1];
+    expect(project.Properties.Environment.ComputeType).toBe(
+      'BUILD_GENERAL1_MEDIUM',
+    );
+    expect(project.Properties.Environment.EnvironmentVariables).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          Name: 'NODE_OPTIONS',
+          Value: '--max-old-space-size=4096',
+        }),
+      ]),
+    );
+  });
+
+  it('passes required v1.3.0 authentication and namespace parameters', () => {
+    const projects = template.findResources('AWS::CodeBuild::Project');
+    const buildSpecs = Object.values(projects).map((project) =>
+      JSON.stringify(project.Properties.Source.BuildSpec),
+    );
+    const deploySpec = (stack: string) => {
+      const spec = buildSpecs.find((candidate) =>
+        candidate.includes(`Deploying upstream stack: ${stack}`),
+      );
+      expect(spec).toBeDefined();
+      return spec!;
+    };
+
+    for (const stack of ['account-pool', 'idc', 'data', 'compute']) {
+      expect(deploySpec(stack)).toContain('Namespace=${NAMESPACE');
+    }
+    expect(deploySpec('data')).toContain(
+      'SamlMetadataUrl=${SAML_METADATA_URL',
+    );
+    expect(deploySpec('data')).toContain(
+      'AwsAccessPortalUrl=${AWS_ACCESS_PORTAL_URL',
+    );
+    expect(deploySpec('account-pool')).toContain(
+      'AdditionalPrincipalExceptions',
+    );
+    expect(deploySpec('account-pool')).toContain(
+      'BedrockInferenceProfilePatterns',
+    );
+    expect(deploySpec('compute')).toContain('AllowListedIPRanges');
+  });
+
+  it('generates POSIX-compatible deploy commands for CodeBuild /bin/sh', () => {
+    const projects = template.findResources('AWS::CodeBuild::Project');
+    const deployProjects = Object.entries(projects).filter(([name]) =>
+      name.includes('Deploy'),
+    );
+    expect(deployProjects.length).toBeGreaterThan(0);
+
+    for (const [name, project] of deployProjects) {
+      const rawBuildSpec = project.Properties.Source.BuildSpec;
+      expect(typeof rawBuildSpec).toBe('string');
+      const buildSpec = JSON.parse(rawBuildSpec as string);
+      const commands = buildSpec.phases.build.commands as string[];
+      const script = commands.join('\n');
+
+      expect(script).toContain('set -- --context');
+      expect(script).toContain('"$@"');
+      expect(script).not.toMatch(/CDK_CONTEXT_ARGS|\+=\(|=\([^)]/);
+
+      const syntax = spawnSync('/bin/sh', ['-n'], {
+        input: script,
+        encoding: 'utf8',
+      });
+      expect({ name, status: syntax.status, stderr: syntax.stderr }).toEqual({
+        name,
+        status: 0,
+        stderr: '',
+      });
+
+      const optionalContexts = commands.filter((command) =>
+        command.startsWith('if [ -n '),
+      );
+      const setE = spawnSync('/bin/sh', ['-eu'], {
+        input: optionalContexts.join('\n'),
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH },
+      });
+      expect({ name, status: setE.status, stderr: setE.stderr }).toEqual({
+        name,
+        status: 0,
+        stderr: '',
+      });
+    }
+  });
+
   it('creates an approval unblocker for every manual approval action', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
-      Runtime: 'nodejs22.x',
+      Runtime: 'nodejs24.x',
       Environment: {
         Variables: Match.objectLike({
           PIPELINE_NAME: 'TestInnovationSandboxPipeline',
