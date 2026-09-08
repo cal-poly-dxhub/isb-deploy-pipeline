@@ -77,6 +77,9 @@ const UPSTREAM_PASSTHROUGH_KEYS: ReadonlyArray<string> = [
   // AccountPool stack parameters.
   'PARENT_OU_ID',
   'AWS_REGIONS',
+  'ADDITIONAL_ALLOWED_SERVICES',
+  'ADDITIONAL_PRINCIPAL_EXCEPTIONS',
+  'BEDROCK_INFERENCE_PROFILE_PATTERNS',
 
   // IAM Identity Center wiring (required by the IDC and Compute stacks).
   'IDENTITY_STORE_ID',
@@ -87,14 +90,37 @@ const UPSTREAM_PASSTHROUGH_KEYS: ReadonlyArray<string> = [
   'MANAGER_GROUP_NAME',
   'USER_GROUP_NAME',
 
-  // Network/security tuning.
-  'ALLOWED_IP_ADDRESSES',
+  // Authentication inputs required for v1.3+
+  'SAML_METADATA_URL',
+  'AWS_ACCESS_PORTAL_URL',
 
-  // Cleanup behavior tuning.
-  'AWS_NUKE_DRY_RUN_MODE',
+  // Compute stack network, domain, and account-cleaner tuning.
+  'ALLOW_LISTED_IP_RANGES',
+  'CUSTOM_DOMAIN_NAME',
+  'CUSTOM_DOMAIN_CERTIFICATE_ARN',
+  'USE_STABLE_TAGGING',
 
-  // Required ToS acknowledgement on some upstream releases.
+  // Build-time context supported by the v1.3+ upstream deploy scripts.
+  'DEPLOYMENT_MODE',
+  'NUKE_CONFIG_FILE_PATH',
+  'SCP_DIRECTORY_PATH',
+  'LOG_LEVEL',
+  'CLOUDWATCH_LOG_RETENTION_IN_DAYS',
+  'S3_LOGS_ARCHIVE_RETENTION_IN_DAYS',
+  'S3_LOGS_GLACIER_RETENTION_IN_DAYS',
+  'API_THROTTLING_RATE_LIMIT',
+  'API_THROTTLING_BURST_LIMIT',
+  'COGNITO_ACCESS_TOKEN_VALIDITY_MINUTES',
+  'COGNITO_ID_TOKEN_VALIDITY_MINUTES',
+  'COGNITO_REFRESH_TOKEN_VALIDITY_DAYS',
+
+  // Required ToS acknowledgement.
   'ACCEPT_SOLUTION_TERMS_OF_USE',
+
+  // Legacy v1.2 keys are still carried so an existing SSM parameter remains
+  // readable during the upgrade. v1.3+ no longer consumes these values.
+  'ALLOWED_IP_ADDRESSES',
+  'AWS_NUKE_DRY_RUN_MODE',
 ];
 
 /**
@@ -126,6 +152,10 @@ function readStage(
   // forwarded (the upstream uses its built-in defaults).
   const envOverrides: Record<string, string> = {
     NAMESPACE: optionalEnv(`${prefix}_NAMESPACE`, stageName.toLowerCase())!,
+    // Required by the v1.3.0 Data stack. Fail during synth rather than after
+    // AccountPool and IDC have already been upgraded.
+    SAML_METADATA_URL: requireEnv(`${prefix}_SAML_METADATA_URL`),
+    AWS_ACCESS_PORTAL_URL: requireEnv(`${prefix}_AWS_ACCESS_PORTAL_URL`),
   };
   for (const key of UPSTREAM_PASSTHROUGH_KEYS) {
     const value = optionalEnv(`${prefix}_${key}`);

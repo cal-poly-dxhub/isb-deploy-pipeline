@@ -21,6 +21,7 @@
 # A diff is informational: failures are recorded in the output but never abort
 # the run, because being unable to render a diff must not block a deploy.
 set -uo pipefail
+set -f # parameter values can contain '*' ARN patterns; never pathname-expand them
 
 OUT_FILE="${1:?usage: render_stage_diff.sh <out-file> <stack>:<account>:<region> ...}"
 shift
@@ -32,6 +33,21 @@ TOOLING_ACCOUNT="${TOOLING_ACCOUNT:-}"
 CDK="npm run --silent --workspace @amzn/innovation-sandbox-infrastructure cdk --"
 
 # Read-only change sets are subject to the same CloudFormation validation as a
+
+# Match the build-time contexts used by deploy-step.ts/upstream
+CDK_CONTEXT_ARGS=(--context "deploymentMode=${DEPLOYMENT_MODE:-prod}")
+[ -n "${LOG_LEVEL:-}" ] && CDK_CONTEXT_ARGS+=(--context "logLevel=$LOG_LEVEL")
+[ -n "${CLOUDWATCH_LOG_RETENTION_IN_DAYS:-}" ] && CDK_CONTEXT_ARGS+=(--context "cloudWatchLogRetentionInDays=$CLOUDWATCH_LOG_RETENTION_IN_DAYS")
+[ -n "${S3_LOGS_ARCHIVE_RETENTION_IN_DAYS:-}" ] && CDK_CONTEXT_ARGS+=(--context "s3LogsArchiveRetentionInDays=$S3_LOGS_ARCHIVE_RETENTION_IN_DAYS")
+[ -n "${S3_LOGS_GLACIER_RETENTION_IN_DAYS:-}" ] && CDK_CONTEXT_ARGS+=(--context "s3LogsGlacierRetentionInDays=$S3_LOGS_GLACIER_RETENTION_IN_DAYS")
+[ -n "${API_THROTTLING_RATE_LIMIT:-}" ] && CDK_CONTEXT_ARGS+=(--context "apiThrottlingRateLimit=$API_THROTTLING_RATE_LIMIT")
+[ -n "${API_THROTTLING_BURST_LIMIT:-}" ] && CDK_CONTEXT_ARGS+=(--context "apiThrottlingBurstLimit=$API_THROTTLING_BURST_LIMIT")
+[ -n "${COGNITO_ACCESS_TOKEN_VALIDITY_MINUTES:-}" ] && CDK_CONTEXT_ARGS+=(--context "cognitoAccessTokenValidityMinutes=$COGNITO_ACCESS_TOKEN_VALIDITY_MINUTES")
+[ -n "${COGNITO_ID_TOKEN_VALIDITY_MINUTES:-}" ] && CDK_CONTEXT_ARGS+=(--context "cognitoIdTokenValidityMinutes=$COGNITO_ID_TOKEN_VALIDITY_MINUTES")
+[ -n "${COGNITO_REFRESH_TOKEN_VALIDITY_DAYS:-}" ] && CDK_CONTEXT_ARGS+=(--context "cognitoRefreshTokenValidityDays=$COGNITO_REFRESH_TOKEN_VALIDITY_DAYS")
+[ -n "${NUKE_CONFIG_FILE_PATH:-}" ] && CDK_CONTEXT_ARGS+=(--context "nukeConfigFilePath=$NUKE_CONFIG_FILE_PATH")
+[ -n "${SCP_DIRECTORY_PATH:-}" ] && CDK_CONTEXT_ARGS+=(--context "scpDirectoryPath=$SCP_DIRECTORY_PATH")
+[ -n "${PRIVATE_ECR_REPO:-}" ] && CDK_CONTEXT_ARGS+=(--context "privateEcrRepo=$PRIVATE_ECR_REPO")
 # real deploy: every required Parameter must be supplied, or CreateChangeSet
 # throws MissingParameters and cdk diff silently falls back to a template-only
 # diff ("Could not create a change set..."). This mirrors stackDeployCmd in
@@ -40,28 +56,42 @@ CDK="npm run --silent --workspace @amzn/innovation-sandbox-infrastructure cdk --
 stack_parameters() {
   case "$1" in
     InnovationSandbox-AccountPool)
-      printf -- '--parameters ParentOuId=%s --parameters HubAccountId=%s --parameters IsbManagedRegions=%s' \
+      printf -- '--parameters Namespace=%s --parameters ParentOuId=%s --parameters HubAccountId=%s --parameters IsbManagedRegions=%s' \
+        "${NAMESPACE:?NAMESPACE is required}" \
         "${PARENT_OU_ID:?PARENT_OU_ID is required}" \
         "${HUB_ACCOUNT_ID:?HUB_ACCOUNT_ID is required}" \
         "${AWS_REGIONS:?AWS_REGIONS is required}"
+      [ -n "${ADDITIONAL_ALLOWED_SERVICES:-}" ] && printf -- ' --parameters AdditionalAllowedServices=%s' "$ADDITIONAL_ALLOWED_SERVICES"
+      [ -n "${ADDITIONAL_PRINCIPAL_EXCEPTIONS:-}" ] && printf -- ' --parameters AdditionalPrincipalExceptions=%s' "$ADDITIONAL_PRINCIPAL_EXCEPTIONS"
+      [ -n "${BEDROCK_INFERENCE_PROFILE_PATTERNS:-}" ] && printf -- ' --parameters BedrockInferenceProfilePatterns=%s' "$BEDROCK_INFERENCE_PROFILE_PATTERNS"
       ;;
     InnovationSandbox-IDC)
-      printf -- '--parameters IdentityStoreId=%s --parameters SsoInstanceArn=%s --parameters OrgMgtAccountId=%s --parameters HubAccountId=%s --parameters AdminGroupName=%s --parameters ManagerGroupName=%s --parameters UserGroupName=%s' \
+      printf -- '--parameters Namespace=%s --parameters IdentityStoreId=%s --parameters SsoInstanceArn=%s --parameters OrgMgtAccountId=%s --parameters HubAccountId=%s' \
+        "${NAMESPACE:?NAMESPACE is required}" \
         "${IDENTITY_STORE_ID:?IDENTITY_STORE_ID is required}" \
         "${SSO_INSTANCE_ARN:?SSO_INSTANCE_ARN is required}" \
         "${ORG_MGT_ACCOUNT_ID:?ORG_MGT_ACCOUNT_ID is required}" \
-        "${HUB_ACCOUNT_ID:?HUB_ACCOUNT_ID is required}" \
-        "${ADMIN_GROUP_NAME:-InnovationSandboxAdmins}" \
-        "${MANAGER_GROUP_NAME:-InnovationSandboxManagers}" \
-        "${USER_GROUP_NAME:-InnovationSandboxUsers}"
+        "${HUB_ACCOUNT_ID:?HUB_ACCOUNT_ID is required}"
+      [ -n "${ADMIN_GROUP_NAME:-}" ] && printf -- ' --parameters AdminGroupName=%s' "$ADMIN_GROUP_NAME"
+      [ -n "${MANAGER_GROUP_NAME:-}" ] && printf -- ' --parameters ManagerGroupName=%s' "$MANAGER_GROUP_NAME"
+      [ -n "${USER_GROUP_NAME:-}" ] && printf -- ' --parameters UserGroupName=%s' "$USER_GROUP_NAME"
       ;;
     InnovationSandbox-Data)
-      ;; # No CloudFormation Parameters on this stack.
+      printf -- '--parameters Namespace=%s --parameters SamlMetadataUrl=%s --parameters AwsAccessPortalUrl=%s' \
+        "${NAMESPACE:?NAMESPACE is required}" \
+        "${SAML_METADATA_URL:?SAML_METADATA_URL is required for v1.3.0}" \
+        "${AWS_ACCESS_PORTAL_URL:?AWS_ACCESS_PORTAL_URL is required for v1.3.0}"
+      ;;
     InnovationSandbox-Compute)
-      printf -- '--parameters OrgMgtAccountId=%s --parameters IdcAccountId=%s --parameters AcceptSolutionTermsOfUse=%s' \
+      printf -- '--parameters Namespace=%s --parameters OrgMgtAccountId=%s --parameters IdcAccountId=%s --parameters AcceptSolutionTermsOfUse=%s' \
+        "${NAMESPACE:?NAMESPACE is required}" \
         "${ORG_MGT_ACCOUNT_ID:?ORG_MGT_ACCOUNT_ID is required}" \
         "${IDC_ACCOUNT_ID:?IDC_ACCOUNT_ID is required}" \
         "${ACCEPT_SOLUTION_TERMS_OF_USE:-Accept}"
+      [ -n "${CUSTOM_DOMAIN_NAME:-}" ] && printf -- ' --parameters CustomDomainName=%s' "$CUSTOM_DOMAIN_NAME"
+      [ -n "${CUSTOM_DOMAIN_CERTIFICATE_ARN:-}" ] && printf -- ' --parameters CustomDomainCertificateArn=%s' "$CUSTOM_DOMAIN_CERTIFICATE_ARN"
+      [ -n "${ALLOW_LISTED_IP_RANGES:-}" ] && printf -- ' --parameters AllowListedIPRanges=%s' "$ALLOW_LISTED_IP_RANGES"
+      [ -n "${USE_STABLE_TAGGING:-}" ] && printf -- ' --parameters UseStableTagging=%s' "$USE_STABLE_TAGGING"
       ;;
     *)
       echo "WARNING: no known CloudFormation Parameters for stack '$1'; diff may fail to create a change set." >&2
@@ -143,7 +173,7 @@ for TARGET in "$@"; do
     CDK_DEFAULT_ACCOUNT="$ACCOUNT" \
     CDK_DEFAULT_REGION="$REGION" \
     $CDK diff "$STACK" --no-color $VERBOSE_FLAG \
-      --context deploymentMode="${DEPLOYMENT_MODE:-STANDARD}" \
+      "${CDK_CONTEXT_ARGS[@]}" \
       $STACK_PARAMS \
       >"$STACK_DIFF" 2>&1; then
     DIFF_OK=1

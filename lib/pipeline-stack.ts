@@ -30,8 +30,8 @@ import { addInnovationSandboxDeployment } from './stages/innovation-sandbox-wave
 import { stageDiffUrl } from './steps/diff-step';
 
 /** Centralized version constants to prevent drift across pipeline steps. */
-const NODEJS_VERSION = '22';
-const CDK_CLI_VERSION = '2.167.1';
+const NODEJS_VERSION = '24';
+const CDK_CLI_VERSION = '2.1139.0';
 
 /** Default SSM parameter holding the pipeline configuration. */
 const DEFAULT_CONFIG_PARAMETER_NAME = '/isb-pipeline/config';
@@ -232,7 +232,7 @@ export class PipelineStack extends Stack {
       ],
       env: synthEnv,
       buildEnvironment: {
-        buildImage: codebuild.LinuxBuildImage.AMAZON_LINUX_2_5,
+        buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
         computeType: codebuild.ComputeType.LARGE,
         privileged: true,
       },
@@ -269,7 +269,7 @@ export class PipelineStack extends Stack {
       // bucket created by the construct does not become a duplicate.
       codeBuildDefaults: {
         buildEnvironment: {
-          buildImage: codebuild.LinuxBuildImage.AMAZON_LINUX_2_5,
+          buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
           computeType: codebuild.ComputeType.MEDIUM,
         },
         // Force Node 22 for every CodeBuild project (deploy, self-mutate,
@@ -433,9 +433,8 @@ export class PipelineStack extends Stack {
     // which releases the lock so the waiting execution can enter.
     if ((config.unblockStaleApprovals ?? true) && approvalActions.length > 0) {
       const unblocker = new lambda.Function(this, 'ApprovalUnblocker', {
-        // Constructed by name rather than via lambda.Runtime.NODEJS_22_X
-        // because the enum in aws-cdk-lib 2.167.1 stops at NODEJS_20_X. Kept on
-        // 22 to match NODEJS_VERSION used by every CodeBuild project above.
+        // Constructed by name to keep the Lambda and CodeBuild Node versions
+        // tied to the same constant.
         runtime: new lambda.Runtime(
           `nodejs${NODEJS_VERSION}.x`,
           lambda.RuntimeFamily.NODEJS,
