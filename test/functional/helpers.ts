@@ -1,3 +1,11 @@
+import {
+  CognitoIdentityClient,
+  GetCredentialsForIdentityCommand,
+  GetIdCommand,
+} from "@aws-sdk/client-cognito-identity";
+import { Sha256 } from "@aws-crypto/sha256-js";
+import { HttpRequest } from "@aws-sdk/protocol-http";
+import { SignatureV4 } from "@aws-sdk/signature-v4";
 import * as path from "path";
 import * as fs from "fs";
 import * as dotenv from "dotenv";
@@ -5,6 +13,8 @@ import * as dotenv from "dotenv";
 dotenv.config({ path: path.resolve(__dirname, ".env.functional") });
 
 const STATE_FILE = path.resolve(__dirname, ".functional-state.json");
+const API_REQUEST_TIMEOUT_MS = 30_000;
+const API_CREDENTIAL_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 /** Parse a comma-separated env var into a trimmed, de-duplicated list. */
 function parseList(value: string | undefined): string[] {
@@ -19,8 +29,14 @@ function parseList(value: string | undefined): string[] {
 }
 
 export const config = {
+  /** API Gateway invoke URL, including its stage path. */
   apiUrl: process.env.ISB_API_URL!,
-  apiToken: process.env.ISB_API_TOKEN!,
+  /** Home region of the API Gateway and Cognito identity pool. */
+  apiRegion: process.env.ISB_API_REGION ?? "us-west-2",
+  /** Cognito user-pool identity token copied from the signed-in UI. */
+  apiIdToken: process.env.ISB_API_ID_TOKEN!,
+  /** Data-stack CognitoIdentityPoolId output. */
+  cognitoIdentityPoolId: process.env.ISB_COGNITO_IDENTITY_POOL_ID!,
   hubRegion: process.env.ISB_HUB_REGION ?? "us-west-2",
   namespace: process.env.ISB_NAMESPACE ?? "myisb",
 
@@ -38,12 +54,11 @@ export const config = {
   testInstanceType: process.env.ISB_TEST_INSTANCE_TYPE ?? "t3.nano",
 
   /**
-   * Role the admin credentials assume inside the sandbox account to verify
-   * deletion after the lease is terminated. Organizations creates
-   * `OrganizationAccountAccessRole` in every member account by default.
+   * Optional role to assume inside the sandbox account for deletion
+   * verification. Leave unset when AWS_* or ISB_ADMIN_AWS_* already belong to
+   * the sandbox account; no role is assumed by default.
    */
-  adminAssumeRoleName:
-    process.env.ISB_ADMIN_ASSUME_ROLE_NAME ?? "OrganizationAccountAccessRole",
+  adminAssumeRoleName: process.env.ISB_ADMIN_ASSUME_ROLE_NAME || undefined,
 };
 
 export type AwsCredentials = {
@@ -415,6 +430,10 @@ export async function assumeSandboxAdmin(
       "Admin credentials not configured. Set ISB_ADMIN_AWS_* (or AWS_*) in .env.functional.",
     );
   }
+  if (!config.adminAssumeRoleName) {
+    return base;
+  }
+
   const sts = new STSClient({ region, credentials: base });
 
   const identity = await sts.send(new GetCallerIdentityCommand({}));
@@ -620,41 +639,212 @@ export async function latestAmazonLinuxAmi(
   return res.Parameter!.Value!;
 }
 
+function withTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${timeoutMs / 1000}s`)),
+      timeoutMs,
+    );
+    operation.then(resolve, reject).finally(() => clearTimeout(timer));
+  });
+}
+
+type CachedApiCredentials = AwsCredentials & { expiresAt: number };
+let cachedApiCredentials: CachedApiCredentials | undefined;
+
+function cognitoUserPoolProvider(idToken: string): string {
+  const payload = idToken.split(".")[1];
+  if (!payload) throw new Error("ISB_API_ID_TOKEN is not a valid JWT");
+
+  let claims: { iss?: string };
+  try {
+    claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("ISB_API_ID_TOKEN contains an invalid JWT payload");
+  }
+  if (!claims.iss) {
+    throw new Error("ISB_API_ID_TOKEN is missing its issuer claim");
+  }
+
+  const issuer = new URL(claims.iss);
+  return `${issuer.host}${issuer.pathname.replace(/\/$/, "")}`;
+}
+
+async function getApiCredentials(): Promise<AwsCredentials> {
+  if (
+    cachedApiCredentials &&
+    cachedApiCredentials.expiresAt >
+      Date.now() + API_CREDENTIAL_REFRESH_MARGIN_MS
+  ) {
+    return cachedApiCredentials;
+  }
+  if (!config.apiIdToken || !config.cognitoIdentityPoolId) {
+    throw new Error(
+      "ISB_API_ID_TOKEN and ISB_COGNITO_IDENTITY_POOL_ID are required; use the Cognito idToken and Data-stack CognitoIdentityPoolId output",
+    );
+  }
+
+  const logins = {
+    [cognitoUserPoolProvider(config.apiIdToken)]: config.apiIdToken,
+  };
+  const identityClient = new CognitoIdentityClient({
+    region: config.apiRegion,
+  });
+  const identity = await identityClient.send(
+    new GetIdCommand({
+      IdentityPoolId: config.cognitoIdentityPoolId,
+      Logins: logins,
+    }),
+  );
+  if (!identity.IdentityId) {
+    throw new Error("Cognito Identity Pool did not return an IdentityId");
+  }
+
+  const result = await identityClient.send(
+    new GetCredentialsForIdentityCommand({
+      IdentityId: identity.IdentityId,
+      Logins: logins,
+    }),
+  );
+  const credentials = result.Credentials;
+  if (
+    !credentials?.AccessKeyId ||
+    !credentials.SecretKey ||
+    !credentials.SessionToken
+  ) {
+    throw new Error(
+      "Cognito Identity Pool did not return complete temporary AWS credentials",
+    );
+  }
+
+  cachedApiCredentials = {
+    accessKeyId: credentials.AccessKeyId,
+    secretAccessKey: credentials.SecretKey,
+    sessionToken: credentials.SessionToken,
+    expiresAt: credentials.Expiration?.getTime() ?? Date.now() + 45 * 60 * 1000,
+  };
+  return cachedApiCredentials;
+}
+
 export async function isbApi(
   method: string,
   apiPath: string,
   body?: Record<string, unknown>,
 ): Promise<{ status: number; data: any }> {
-  const response = await fetch(`${config.apiUrl}${apiPath}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${config.apiToken}`,
-      "Content-Type": "application/json",
-      Origin: config.apiUrl.replace("/api", ""),
-    },
-    body: body ? JSON.stringify(body) : undefined,
+  if (!config.apiIdToken || !config.cognitoIdentityPoolId) {
+    throw new Error(
+      "ISB_API_ID_TOKEN and ISB_COGNITO_IDENTITY_POOL_ID are required; copy the idToken and Data-stack pool ID",
+    );
+  }
+  if (!config.apiUrl) {
+    throw new Error(
+      "ISB_API_URL is required and must be the API Gateway invoke URL",
+    );
+  }
+
+  const credentials = await withTimeout(
+    getApiCredentials(),
+    API_REQUEST_TIMEOUT_MS,
+    "Cognito identity credential exchange",
+  );
+  const bodyText = body === undefined ? undefined : JSON.stringify(body);
+  const apiUrl = new URL(
+    `${config.apiUrl.replace(/\/+$/, "")}${apiPath.startsWith("/") ? apiPath : `/${apiPath}`}`,
+  );
+  const methodUpper = method.toUpperCase();
+  const [pathname, queryString] = `${apiUrl.pathname}${apiUrl.search}`.split(
+    "?",
+  );
+  const query = queryString
+    ? Object.fromEntries(new URLSearchParams(queryString))
+    : {};
+  const signer = new SignatureV4({
+    credentials,
+    region: config.apiRegion,
+    service: "execute-api",
+    sha256: Sha256,
   });
+
+  // Match the upstream ApiProxy: API Gateway authorizes the SigV4 request,
+  // while the application reads x-isb-identity for RBAC. This header must be
+  // present in the HttpRequest before signing.
+  const signRequest = new HttpRequest({
+    method: methodUpper,
+    protocol: "https:",
+    hostname: apiUrl.hostname,
+    path: pathname,
+    query,
+    headers: {
+      host: apiUrl.hostname,
+      "content-type": "application/json",
+      "x-isb-identity": config.apiIdToken,
+    },
+    body: bodyText,
+  });
+  const signed = await signer.sign(signRequest);
+
+  let response: Response;
+  try {
+    response = await fetch(apiUrl, {
+      method: methodUpper,
+      headers: signed.headers as Record<string, string>,
+      body: bodyText,
+      signal: AbortSignal.timeout(API_REQUEST_TIMEOUT_MS),
+    });
+  } catch (error: any) {
+    if (error?.name === "TimeoutError" || error?.name === "AbortError") {
+      throw new Error(
+        `API request timed out after ${API_REQUEST_TIMEOUT_MS / 1000}s: ${methodUpper} ${apiPath}`,
+      );
+    }
+    throw new Error(
+      `API request failed: ${methodUpper} ${apiPath}: ${String(error)}`,
+    );
+  }
   const data = await response.json().catch(() => null);
   return { status: response.status, data };
 }
 
-export function pollUntil(
+/** Normalize legacy standard Base64 lease keys to the API's Base64URL format. */
+export function normalizeLeaseId(value: string): string {
+  return value.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+export function encodeLeaseId(userEmail: string, uuid: string): string {
+  return Buffer.from(JSON.stringify({ userEmail, uuid })).toString("base64url");
+}
+
+export async function pollUntil(
   fn: () => Promise<boolean>,
   timeoutMs: number,
   intervalMs = 10_000,
+  label = "poll",
 ): Promise<void> {
-  return new Promise(async (resolve, reject) => {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      try {
-        if (await fn()) return resolve();
-      } catch {
-        /* retry */
-      }
-      await new Promise((r) => setTimeout(r, intervalMs));
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+
+  while (Date.now() < deadline) {
+    try {
+      if (await fn()) return;
+    } catch (error) {
+      lastError = error;
     }
-    reject(new Error(`Timed out after ${timeoutMs}ms`));
-  });
+
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.min(intervalMs, remainingMs)),
+    );
+  }
+
+  const lastErrorText = lastError ? ` Last error: ${String(lastError)}` : "";
+  throw new Error(
+    `Timed out after ${timeoutMs / 1000}s waiting for ${label}.${lastErrorText}`,
+  );
 }
 
 export function saveState(state: Record<string, any>) {

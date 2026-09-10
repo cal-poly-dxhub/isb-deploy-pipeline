@@ -548,9 +548,9 @@ step 5 above).
 | `api-gateway.int.test.ts`    | Compute-stack API URL is HTTPS, rejects unauthenticated requests with 401/403, and serves CORS preflight.                                                                                                              |
 | `web-ui.int.test.ts`         | CloudFront distribution is `Deployed` and the root URL returns a 200 with the SPA shell HTML.                                                                                                                          |
 | `dynamodb.int.test.ts`       | Each table referenced by Data-stack outputs is `ACTIVE`.                                                                                                                                                               |
-| `appconfig.int.test.ts`      | v1.3 Data outputs resolve the retained cleanup AppConfig application and its latest deployment is healthy.                                                                                                              |
+| `appconfig.int.test.ts`      | v1.3 Data outputs resolve the retained cleanup AppConfig application and its latest deployment is healthy.                                                                                                             |
 | `lambda.int.test.ts`         | Every Lambda referenced by Compute-stack outputs is `Active` and not on a deprecated runtime.                                                                                                                          |
-| `step-functions.int.test.ts` | The v1.3 durable cleanup Lambda is `Active`; remaining workflow state machines are `ACTIVE` and recent executions don't have a 100% failure rate.                                                                  |
+| `step-functions.int.test.ts` | The v1.3 durable cleanup Lambda is `Active`; remaining workflow state machines are `ACTIVE` and recent executions don't have a 100% failure rate.                                                                      |
 | `eventbridge.int.test.ts`    | A custom InnovationSandbox event bus exists, has at least one ENABLED rule, and every enabled rule has at least one target.                                                                                            |
 | `waf.int.test.ts`            | A regional WAF web ACL exists, has at least one rule, and is associated with at least one API Gateway stage.                                                                                                           |
 | `ecr.int.test.ts`            | (Skipped unless `ISB_PRIVATE_ECR_REPO` is set) The private AWS Nuke ECR repository exists and the latest image has a SHA-256 digest.                                                                                   |
@@ -586,20 +586,25 @@ four stages with human action between each.
 cp test/functional/.env.functional.example test/functional/.env.functional
 ```
 
+The deployed v1.3 API uses SigV4 authorization and separately requires the Cognito user-pool **idToken** in the signed `x-isb-identity` header for RBAC. The functional tests obtain temporary IAM credentials from the Cognito Identity Pool using the idToken; no M2M stack or manually copied AWS keys is required. After signing in to ISB, open browser developer tools and go to the ISB domain's **Application → Local Storage**. Copy the value from the key ending in `.idToken` into `ISB_API_ID_TOKEN`. Do not use `.accessToken` or `.refreshToken`. Never commit or share the token; refresh it before a later stage if it expires.
+
+Also copy `CognitoIdentityPoolId` from the Data stack Outputs tab into `ISB_COGNITO_IDENTITY_POOL_ID`. Use the API Gateway invoke URL from the Compute stack (including its stage) for `ISB_API_URL`.
+
 Fill in the following values:
 
-| Variable                                 | Where to get it                                                                                                                                                          |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ISB_API_URL`                            | `https://<your-cloudfront-or-domain>/api`                                                                                                                                |
-| `ISB_API_TOKEN`                          | Browser → DevTools → Application → Session Storage → `isb-jwt`                                                                                                           |
-| `ISB_LEASE_TEMPLATE_ID`                  | Create one in the ISB UI, or leave blank (setup stage creates one)                                                                                                       |
-| `AWS_ACCESS_KEY_ID` / `SECRET` / `TOKEN` | Admin credentials already authorized in the sandbox account, or credentials able to assume the sandbox account role; used for teardown cleanup and deletion verification |
-| `ISB_HUB_REGION`                         | Region where ISB is deployed (e.g. `us-west-2`)                                                                                                                          |
-| `ISB_NAMESPACE`                          | Namespace used during deploy (e.g. `myisb`, `prod`)                                                                                                                      |
-| `ISB_SANDBOX_REGIONS`                    | Comma-separated supported regions to provision into and verify. Mirror your deployment's `AWS_REGIONS`. Defaults to `ISB_HUB_REGION`.                                    |
-| `ISB_TEST_INSTANCE_TYPE`                 | Optional. Smallest instance type to launch (default `t3.nano`).                                                                                                          |
-| `ISB_ADMIN_AWS_*`                        | Admin credentials for teardown cleanup and the verify stage. Falls back to `AWS_*`.                                                                                      |
-| `ISB_ADMIN_ASSUME_ROLE_NAME`             | Optional. Role assumed in the sandbox account to clean/verify resources (default `OrganizationAccountAccessRole`).                                                       |
+| Variable                                 | Where to get it                                                                                                                       |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `ISB_API_URL`                            | Compute stack API Gateway invoke URL, including its stage (for example `https://<api-id>.execute-api.us-west-2.amazonaws.com/prod`)   |
+| `ISB_API_REGION`                         | Home region of the API Gateway and identity pool (for example `us-west-2`)                                                            |
+| `ISB_API_ID_TOKEN`                       | Cognito Local Storage value whose key ends in `.idToken`                                                                              |
+| `ISB_COGNITO_IDENTITY_POOL_ID`           | Data stack output `CognitoIdentityPoolId`                                                                                             |
+| `AWS_ACCESS_KEY_ID` / `SECRET` / `TOKEN` | Admin credentials already authorized in the sandbox account; used directly for teardown cleanup and deletion verification             |
+| `ISB_HUB_REGION`                         | Region where ISB is deployed (e.g. `us-west-2`)                                                                                       |
+| `ISB_NAMESPACE`                          | Namespace used during deploy (e.g. `myisb`, `prod`)                                                                                   |
+| `ISB_SANDBOX_REGIONS`                    | Comma-separated supported regions to provision into and verify. Mirror your deployment's `AWS_REGIONS`. Defaults to `ISB_HUB_REGION`. |
+| `ISB_TEST_INSTANCE_TYPE`                 | Optional. Smallest instance type to launch (default `t3.nano`).                                                                       |
+| `ISB_ADMIN_AWS_*`                        | Admin credentials for teardown cleanup and the verify stage. Falls back to `AWS_*`.                                                   |
+| `ISB_ADMIN_ASSUME_ROLE_NAME`             | Optional. Explicit role to assume for cleanup; leave blank to use the configured admin credentials directly.                          |
 
 ### Running
 
@@ -650,8 +655,9 @@ verification if desired.
 > Organizations SCPs must still allow the test's `ec2:CreateDefaultVpc`,
 > `ec2:RunInstances`, and `s3:CreateBucket` actions.
 
-> **Note:** The JWT expires after 60 minutes. If a stage takes too long, refresh
-> the JWT in `.env.functional` before running the next stage.
+> **Note:** The Cognito ID token is temporary. Refresh `ISB_API_ID_TOKEN` before
+> a later stage if it expires; the helper obtains fresh identity-pool credentials
+> for the current token automatically.
 
 ## Customisation
 
