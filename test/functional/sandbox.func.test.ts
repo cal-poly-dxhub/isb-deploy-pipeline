@@ -96,7 +96,8 @@ describe("Sandbox Provisioning", () => {
           new PutObjectCommand({
             Bucket: bucket,
             Key: objectKey,
-            Body: "", // empty .txt
+            Body: Buffer.alloc(0),
+            ContentLength: 0, // explicit length avoids unknown-stream warnings
             ContentType: "text/plain",
           }),
         );
@@ -154,16 +155,42 @@ describe("Sandbox Provisioning", () => {
 
   it("summarises what was created", () => {
     const resources: CreatedResource[] = loadState().createdResources ?? [];
-    expect(resources.length).toBe(config.sandboxRegions.length);
+    const configuredRegions = new Set(config.sandboxRegions);
+    const currentResources = resources.filter((resource) =>
+      configuredRegions.has(resource.region),
+    );
+    const currentRegionSet = new Set(
+      currentResources.map((resource) => resource.region),
+    );
+    expect(currentResources).toHaveLength(config.sandboxRegions.length);
+    expect(currentRegionSet).toEqual(configuredRegions);
+
+    const preservedResources = resources.filter(
+      (resource) => !configuredRegions.has(resource.region),
+    );
+    const preservedNote = preservedResources.length
+      ? `\n  Preserved records from earlier runs (teardown will still check them):\n` +
+        preservedResources
+          .map(
+            (resource) =>
+              `    ${resource.region}: ${resource.instanceId}, s3://${resource.bucket}`,
+          )
+          .join("\n") +
+        "\n"
+      : "";
+
     console.log(
       `\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-        `  Provisioned ${resources.length} region(s):\n` +
-        resources
-          .map((r) => `    ${r.region}: ${r.instanceId}, s3://${r.bucket}`)
+        `  Provisioned ${currentResources.length} configured region(s):\n` +
+        currentResources
+          .map(
+            (resource) =>
+              `    ${resource.region}: ${resource.instanceId}, s3://${resource.bucket}`,
+          )
           .join("\n") +
-        `\n\n` +
-        `  Next: terminate the lease and let cleanup run:\n` +
+        preservedNote +
+        `\n  Next: terminate the lease and let cleanup run:\n` +
         `  npm run test:functional -- --testPathPattern=teardown\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`,
     );
